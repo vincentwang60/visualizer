@@ -1,0 +1,3 @@
+com.musicvisualizer.android:style/Theme.HelloGL = 0x7f030000
+com.musicvisualizer.android:string/app_name = 0x7f020000
+com.musicvisualizer.android:drawable/ic_launcher = 0x7f010000

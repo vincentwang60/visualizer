@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.HelloGL" parent="android:Theme.DeviceDefault.NoActionBar"/>
+</resources> 

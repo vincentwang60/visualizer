@@ -5,3 +5,6 @@ build/
 local.properties
 # Ignore macOS system files
 .DS_Store 
+.idea/ 
+
+androidApp/build/

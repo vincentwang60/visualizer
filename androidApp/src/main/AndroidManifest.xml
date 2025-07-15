@@ -5,8 +5,10 @@
         android:icon="@drawable/ic_launcher"
         android:label="HelloGL"
         android:supportsRtl="true">
-        <activity android:name=".MainActivity"
-            android:exported="true">
+        <activity android:name=".Home"
+            android:exported="true"
+            android:screenOrientation="landscape"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

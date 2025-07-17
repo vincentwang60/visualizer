@@ -1,5 +1,7 @@
 #version 310 es
-layout(location = 0) in vec4 vPosition;
+
+layout(location = 0) in vec4 a_position;
+
 void main() {
-    gl_Position = vPosition;
-} 
+    gl_Position = a_position;
+}

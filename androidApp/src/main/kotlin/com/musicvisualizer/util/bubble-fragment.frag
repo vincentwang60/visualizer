@@ -13,18 +13,23 @@ uniform vec2 u_bubblePositions[MAX_BUBBLES];
 
 out vec4 fragColor;
 
+vec3 hsv2rgb(in vec3 c){
+    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
+// returns 2 floats varying in a watercolor effect with position and time
 vec2 watercolor(in vec2 _st, in float _time){
-    float speed = 10.0;
-    float scale = 0.002;
-
-    for (int i = 1; i < 10; i++) {
-        _st.x += 0.3 / float(i) * sin(float(i) * 3.0 * _st.y + _time * speed) + 1. / 1000.0;
-        _st.y += 0.3 / float(i) * cos(float(i) * 3.0 * _st.x + _time * speed) + 2. / 1000.0;
+    float speed = .1;
+    float scale = 0.0025;
+    _st *= scale;    
+    // from https://www.shadertoy.com/view/lsyfWD
+    for (int i = 1; i < 9; i++) {
+        _st.x += 0.3 / float(i) * sin(float(i) * 3.0 * _st.y + _time * speed);
+        _st.y += 0.3 / float(i) * cos(float(i) * 3.0 * _st.x + _time * speed);
     }
-
-    float x = smoothstep(0.95, 1.0, cos(_st.x + _st.y + 1.0) * 0.5 + 0.5);
-    float y = x * (sin(_st.x * _st.y) * 0.5 + 0.5);
-    return vec2(x, y);
+    return _st;
 }
 
 float circle(in vec2 _st, in float _radius, in vec2 _center){
@@ -34,14 +39,11 @@ float circle(in vec2 _st, in float _radius, in vec2 _center){
 }
 
 void main() {
-    vec2 st = gl_FragCoord.xy; // in pixels
-    vec3 bg_color = vec3(0.8, 0.0, 0.2); // background: black
-    vec3 bubble_color = vec3(0.0);
-    float in_bubble = 0.0;
-    
-    vec2 pct = watercolor(st, u_time);
-    float r=cos(pct.x+pct.y+1.)*.5+.5;
-    float g=sin(pct.x+pct.y+1.)*.5+.5;
-    float b=(sin(pct.x+pct.y)+cos(pct.x+pct.y))*.3+.5;
-    fragColor = vec4(vec3(r, g, b), 1.0);
+    vec2 st = gl_FragCoord.xy;
+    vec2 uv = (st / u_resolution) * 2.0 - 1.0;
+    vec2 p = watercolor(st, u_time);
+    vec3 color = hsv2rgb(vec3(fract((p.x + p.y) * 0.15 + u_time * .1), .4, 1.0));
+    float a = sin(p.x * 1.2 + p.y * 1.7 + cos(p.x - p.y));
+    float mask = smoothstep(0.8, 1.0, a);
+    fragColor = vec4(color, mask);
 }

@@ -8,3 +8,4 @@ local.properties
 .idea/ 
 
 androidApp/build/
+androidApp/src/main/kotlin/com/musicvisualizer/util/glslViewer/

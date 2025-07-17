@@ -15,16 +15,17 @@ import com.musicvisualizer.android.visualizers.CircleColorVisualizer
 import com.musicvisualizer.android.VisualizerCarouselGestureListener
 import android.os.Build
 import android.view.WindowInsets
+import android.opengl.GLSurfaceView.Renderer
 import android.view.WindowManager
 
 /**
  * GLSurfaceView that uses a modular Visualizer for rendering.
  */
-class VisualizerGLSurfaceView(activity: Activity, visualizer: Visualizer) : GLSurfaceView(activity) {
+class VisualizerGLSurfaceView(activity: Activity, visualizer: Visualizer, renderer: Renderer) : GLSurfaceView(activity) {
     init {
         // Set EGL context to OpenGL ES 3.0
         setEGLContextClientVersion(3)
-        setRenderer(visualizer.createRenderer())
+        setRenderer(visualizer.createRenderer(activity))
     }
 }
 
@@ -36,7 +37,8 @@ class Home : Activity() {
     private lateinit var glView: GLSurfaceView
     private lateinit var visualizer: Visualizer
     private lateinit var gestureDetector: GestureDetector
-    private val visualizers = listOf(
+    private lateinit var renderer: Renderer
+    private val visualizers: List<Visualizer> = listOf(
         BubbleVisualizer(),
         CircleColorVisualizer()
     )
@@ -44,18 +46,11 @@ class Home : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Enable drawing behind cutout (notch) for true fullscreen
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val lp = window.attributes
-            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            window.attributes = lp
-        }
         visualizer = visualizers[currentVisualizerIndex]
-        glView = VisualizerGLSurfaceView(this, visualizer)
+        renderer = visualizer.createRenderer(this)
+        glView = VisualizerGLSurfaceView(this, visualizer, renderer)
         setContentView(glView)
-
         hideSystemUI()
-
         gestureDetector = GestureDetector(this, VisualizerCarouselGestureListener(
             onSwipeLeft = { showNextVisualizer() },
             onSwipeRight = { showPreviousVisualizer() }
@@ -78,12 +73,14 @@ class Home : Activity() {
     }
 
     private fun updateVisualizer() {
+        // Release previous renderer
+        (renderer as? com.musicvisualizer.android.visualizers.BaseVisualizerRenderer)?.release()
         visualizer = visualizers[currentVisualizerIndex]
         val parent = glView.parent as? android.view.ViewGroup
         parent?.removeView(glView)
-        glView = VisualizerGLSurfaceView(this, visualizer)
+        renderer = visualizer.createRenderer(this)
+        glView = VisualizerGLSurfaceView(this, visualizer, renderer)
         setContentView(glView)
-        hideSystemUI()
         glView.setOnTouchListener { _, event ->
             gestureDetector.onTouchEvent(event)
             true
@@ -91,23 +88,21 @@ class Home : Activity() {
     }
 
     private fun hideSystemUI() {
+        // Enable drawing behind cutout (notch) for true fullscreen
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val lp = window.attributes
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            window.attributes = lp
+        }
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, glView).let { controller ->
             controller.hide(WindowInsetsCompat.Type.systemBars())
-            controller.systemBarsBehavior =
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
-        // Immersive sticky for true fullscreen
-        if (Build.VERSION.SDK_INT < 30) {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                View.SYSTEM_UI_FLAG_FULLSCREEN
-            )
-        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        (renderer as? com.musicvisualizer.android.visualizers.BaseVisualizerRenderer)?.release()
     }
 } 

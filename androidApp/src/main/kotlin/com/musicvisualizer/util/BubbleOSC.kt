@@ -24,7 +24,6 @@ class BubbleOSC(
         )
     }
     private val startTime = System.nanoTime()
-    private val lightPos = floatArrayOf(0.5f, 0.7f, 1.0f)
     private val resolution = floatArrayOf(800f, 600f)
     private var frameCounter = 0
 
@@ -40,7 +39,7 @@ class BubbleOSC(
             angularVelocity += (Random.nextFloat() - 1f) * 0.001f
             angularVelocity = angularVelocity.coerceIn(-0.02f..0.02f)
             angle += if (clockwiseSpin) angularVelocity else -angularVelocity
-            radius = 0.04f + 0.01f * sin((time + seed * 1000f))
+            radius = 0.07f + 0.02f * sin((time + seed * 1000f)) // increased base size and amplitude
         }
     }
 
@@ -55,8 +54,8 @@ class BubbleOSC(
         val bubbleSeeds = FloatArray(numBubbles)
         for (i in 0 until numBubbles) {
             val bubble = bubbles[i]
-            val x = 0.5f + bubble.radius * cos(bubble.angle)
-            val y = 0.5f + bubble.radius * sin(bubble.angle)
+            val x = 0.5f + 0.18f * cos(bubble.angle) // increased distance from center
+            val y = 0.5f + 0.18f * sin(bubble.angle)
             bubbleColors[i * 3] = bubble.color[0]
             bubbleColors[i * 3 + 1] = bubble.color[1]
             bubbleColors[i * 3 + 2] = bubble.color[2]
@@ -68,7 +67,6 @@ class BubbleOSC(
 
         // Send only the basic uniforms and individual bubble data
         sendOSC("/u_numBubbles", numBubbles.toFloat())
-        sendOSC("/u_lightPos", lightPos)
 
         // Send each bubble's data as individual uniforms for glslViewer compatibility
         for (i in 0 until numBubbles) {
@@ -83,7 +81,6 @@ class BubbleOSC(
             println("\n--- OSC Frame #$frameCounter ---")
             println("u_time: $time (not sent, glslViewer sets it)")
             println("u_numBubbles: $numBubbles (sent as float)")
-            println("u_lightPos: [${lightPos.joinToString { "%.3f".format(it) }}] (sent as vec3)")
             println("\nPer-bubble uniforms sent to glslViewer:")
             for (i in 0 until numBubbles) {
                 val c = bubbleColors.slice(i*3 until (i+1)*3)

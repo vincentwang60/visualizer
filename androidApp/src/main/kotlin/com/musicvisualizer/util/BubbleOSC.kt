@@ -1,33 +1,20 @@
-package com.musicvisualizer.util
+package com.musicvisualizer.android.visualizers
 
-import kotlin.math.*
+import android.opengl.GLES30
+import android.opengl.GLSurfaceView.Renderer
+import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.opengles.GL10
 import kotlin.random.Random
-import java.net.DatagramSocket
-import java.net.DatagramPacket
-import java.net.InetAddress
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import kotlin.math.sin
+import kotlin.math.cos
 
-class BubbleOSC(
-    private val host: String = "localhost",
-    private val port: Int = 8000,
-    private val numBubbles: Int = 6
-) {
-    private val socket = DatagramSocket()
-    private val bubbles = List(numBubbles) {
-        Bubble(
-            color = floatArrayOf(Random.nextFloat(), Random.nextFloat(), Random.nextFloat()),
-            radius = 0f,
-            angle = Random.nextFloat() * (2f * PI).toFloat(),
-            angularVelocity = (Random.nextFloat() - 0.5f) * 0.08f,
-            seed = Random.nextFloat()
-        )
-    }
-    private val startTime = System.nanoTime()
-    private val resolution = floatArrayOf(800f, 600f)
-    private var frameCounter = 0
+// Import MAX_BUBBLES from BubbleVisualizer instead of declaring it here
+// const val MAX_BUBBLES = 10  // Removed to avoid conflict
 
-    data class Bubble(
+class BubbleVisualizerOSC : Visualizer {
+    override fun createRenderer(context: android.content.Context): Renderer = BubbleRenderer(context)
+    
+    private data class Bubble(
         var color: FloatArray,
         var radius: Float,
         var angle: Float,
@@ -43,108 +30,115 @@ class BubbleOSC(
         }
     }
 
-    fun update() {
-        val time = (System.nanoTime() - startTime) / 1_000_000_000.0f
-        bubbles.forEach { it.update(time) }
-
-        // Prepare arrays for uniforms (for logging only now)
-        val bubbleColors = FloatArray(numBubbles * 3)
-        val bubbleRadii = FloatArray(numBubbles)
-        val bubblePositions = FloatArray(numBubbles * 2)
-        val bubbleSeeds = FloatArray(numBubbles)
-        for (i in 0 until numBubbles) {
-            val bubble = bubbles[i]
-            val x = 0.5f + 0.18f * cos(bubble.angle) // increased distance from center
-            val y = 0.5f + 0.18f * sin(bubble.angle)
-            bubbleColors[i * 3] = bubble.color[0]
-            bubbleColors[i * 3 + 1] = bubble.color[1]
-            bubbleColors[i * 3 + 2] = bubble.color[2]
-            bubbleRadii[i] = bubble.radius
-            bubblePositions[i * 2] = x
-            bubblePositions[i * 2 + 1] = y
-            bubbleSeeds[i] = bubble.seed
+    private class BubbleRenderer(context: android.content.Context) : BaseVisualizerRenderer(context) {
+        override val vertexShaderFile: String = "shaders/bubble-vertex.glsl"
+        override val fragmentShaderFile: String = "shaders/bubble-fragment.glsl"
+        
+        // Uniform handles
+        private var resolutionHandle = 0
+        private var timeHandle = 0
+        private var numBubblesHandle = 0
+        private var bubbleColorsHandle = 0
+        private var bubbleRadiiHandle = 0
+        private var bubblePositionsHandle = 0
+        private var bubbleSeedsHandle = 0
+        
+        private val numBubbles = 6
+        private val bubbles: List<Bubble>
+        private val startTime = System.nanoTime()
+        private var lastDrawTimeNanos: Long = 0L
+        
+        init {
+            bubbles = List(numBubbles) {
+                val angle = Random.nextFloat() * (2f * Math.PI).toFloat()
+                val angularVelocity = (Random.nextFloat() - 0.5f) * 0.08f
+                Bubble(
+                    color = floatArrayOf(Random.nextFloat(), Random.nextFloat(), Random.nextFloat()),
+                    radius = 0.07f,
+                    angle = angle,
+                    angularVelocity = angularVelocity,
+                    seed = Random.nextFloat()
+                )
+            }
         }
-
-        // Send only the basic uniforms and individual bubble data
-        sendOSC("/u_numBubbles", numBubbles.toFloat())
-
-        // Send each bubble's data as individual uniforms for glslViewer compatibility
-        for (i in 0 until numBubbles) {
-            sendOSC("/u_bubbleColors[$i]", floatArrayOf(bubbleColors[i*3], bubbleColors[i*3+1], bubbleColors[i*3+2]))
-            sendOSC("/u_bubblePositions[$i]", floatArrayOf(bubblePositions[i*2], bubblePositions[i*2+1]))
-            sendOSC("/u_bubbleRadii[$i]", bubbleRadii[i])
-            sendOSC("/u_bubbleSeeds[$i]", bubbleSeeds[i])
+        
+        override fun onSurfaceCreatedExtras(gl: GL10?, config: EGLConfig?) {
+            // Get uniform locations
+            resolutionHandle = GLES30.glGetUniformLocation(program, "u_resolution")
+            timeHandle = GLES30.glGetUniformLocation(program, "u_time")
+            numBubblesHandle = GLES30.glGetUniformLocation(program, "u_numBubbles")
+            bubbleColorsHandle = GLES30.glGetUniformLocation(program, "u_bubbleColors")
+            bubbleRadiiHandle = GLES30.glGetUniformLocation(program, "u_bubbleRadii")
+            bubblePositionsHandle = GLES30.glGetUniformLocation(program, "u_bubblePositions")
+            bubbleSeedsHandle = GLES30.glGetUniformLocation(program, "u_bubbleSeeds")
         }
-
-        frameCounter++
-        if (frameCounter % 100 == 0) {
-            println("\n--- OSC Frame #$frameCounter ---")
-            println("u_time: $time (not sent, glslViewer sets it)")
-            println("u_numBubbles: $numBubbles (sent as float)")
-            println("\nPer-bubble uniforms sent to glslViewer:")
+        
+        override fun onDrawFrameExtras(gl: GL10?) {
+            // Frame rate limiting
+            val nowNanos = System.nanoTime()
+            if (lastDrawTimeNanos != 0L) {
+                val elapsedMs = (nowNanos - lastDrawTimeNanos) / 1_000_000
+                if (elapsedMs < 15) return // ~67 FPS cap
+            }
+            lastDrawTimeNanos = nowNanos
+            
+            // Set basic uniforms
+            if (resolutionHandle >= 0) {
+                GLES30.glUniform2f(resolutionHandle, width.toFloat(), height.toFloat())
+            }
+            
+            val time = (System.nanoTime() - startTime) / 1_000_000_000.0f
+            if (timeHandle >= 0) {
+                GLES30.glUniform1f(timeHandle, time)
+            }
+            
+            if (numBubblesHandle >= 0) {
+                GLES30.glUniform1f(numBubblesHandle, numBubbles.toFloat())
+            }
+            
+            // Update bubble animations
+            bubbles.forEach { it.update(time) }
+            
+            // Prepare bubble data arrays (matching OSC testing code)
+            val bubbleColors = FloatArray(numBubbles * 3)
+            val bubbleRadii = FloatArray(numBubbles)
+            val bubblePositions = FloatArray(numBubbles * 2)
+            val bubbleSeeds = FloatArray(numBubbles)
+            
             for (i in 0 until numBubbles) {
-                val c = bubbleColors.slice(i*3 until (i+1)*3)
-                val x = bubblePositions[i*2]
-                val y = bubblePositions[i*2+1]
-                println("  /u_bubbleColors[$i]: [${"%.3f".format(c[0])}, ${"%.3f".format(c[1])}, ${"%.3f".format(c[2])}] (vec3)")
-                println("  /u_bubblePositions[$i]: [${"%.4f".format(x)}, ${"%.4f".format(y)}] (vec2)")
-                println("  /u_bubbleRadii[$i]: ${"%.4f".format(bubbleRadii[i])} (float)")
-                println("  /u_bubbleSeeds[$i]: ${"%.4f".format(bubbleSeeds[i])} (float)")
+                val bubble = bubbles[i]
+                // Use normalized coordinates (0-1 range)
+                val x = 0.5f + 0.18f * cos(bubble.angle) // increased distance from center
+                val y = 0.5f + 0.18f * sin(bubble.angle)
+                
+                bubbleColors[i * 3] = bubble.color[0]
+                bubbleColors[i * 3 + 1] = bubble.color[1]
+                bubbleColors[i * 3 + 2] = bubble.color[2]
+                bubbleRadii[i] = bubble.radius
+                bubblePositions[i * 2] = x // Keep normalized (0-1)
+                bubblePositions[i * 2 + 1] = y // Keep normalized (0-1)
+                bubbleSeeds[i] = bubble.seed
+            }
+            
+            // Set uniform arrays - check handles first
+            if (bubblePositionsHandle >= 0) {
+                GLES30.glUniform2fv(bubblePositionsHandle, numBubbles, bubblePositions, 0)
+            }
+            if (bubbleColorsHandle >= 0) {
+                GLES30.glUniform3fv(bubbleColorsHandle, numBubbles, bubbleColors, 0)
+            }
+            if (bubbleRadiiHandle >= 0) {
+                GLES30.glUniform1fv(bubbleRadiiHandle, numBubbles, bubbleRadii, 0)
+            }
+            if (bubbleSeedsHandle >= 0) {
+                GLES30.glUniform1fv(bubbleSeedsHandle, numBubbles, bubbleSeeds, 0)
+            }
+            
+            // Check for OpenGL errors
+            val error = GLES30.glGetError()
+            if (error != GLES30.GL_NO_ERROR) {
+                println("OpenGL error in BubbleVisualizer: $error")
             }
         }
     }
-
-    private fun sendOSC(address: String, value: Float) {
-        val message = createOSCMessage(address, value)
-        val packet = DatagramPacket(message, message.size, InetAddress.getByName(host), port)
-        socket.send(packet)
-    }
-
-    private fun sendOSC(address: String, values: FloatArray) {
-        val message = createOSCMessage(address, values)
-        val packet = DatagramPacket(message, message.size, InetAddress.getByName(host), port)
-        socket.send(packet)
-    }
-
-    private fun createOSCMessage(address: String, value: Float): ByteArray {
-        val addressBytes = address.toByteArray()
-        val addressPadding = (4 - (addressBytes.size % 4)) % 4
-        val typeTag = ",f".toByteArray()
-        val typeTagPadding = (4 - (typeTag.size % 4)) % 4
-
-        val buffer = ByteBuffer.allocate(addressBytes.size + addressPadding + typeTag.size + typeTagPadding + 4)
-            .order(ByteOrder.BIG_ENDIAN)
-        buffer.put(addressBytes)
-        repeat(addressPadding) { buffer.put(0) }
-        buffer.put(typeTag)
-        repeat(typeTagPadding) { buffer.put(0) }
-        buffer.putFloat(value)
-        return buffer.array()
-    }
-
-    private fun createOSCMessage(address: String, values: FloatArray): ByteArray {
-        val addressBytes = address.toByteArray()
-        val addressPadding = (4 - (addressBytes.size % 4)) % 4
-        val typeTag = ",${"f".repeat(values.size)}".toByteArray()
-        val typeTagPadding = (4 - (typeTag.size % 4)) % 4
-
-        val buffer = ByteBuffer.allocate(addressBytes.size + addressPadding + typeTag.size + typeTagPadding + values.size * 4)
-            .order(ByteOrder.BIG_ENDIAN)
-        buffer.put(addressBytes)
-        repeat(addressPadding) { buffer.put(0) }
-        buffer.put(typeTag)
-        repeat(typeTagPadding) { buffer.put(0) }
-        values.forEach { buffer.putFloat(it) }
-        return buffer.array()
-    }
-}
-
-fun main() {
-    val bubbleOSC = BubbleOSC()
-    println("Starting BubbleOSC - sending to localhost:8000")
-    println("Press Ctrl+C to stop")
-    while (true) {
-        bubbleOSC.update()
-        Thread.sleep(32) // ~30 FPS
-    }
-}
+} 

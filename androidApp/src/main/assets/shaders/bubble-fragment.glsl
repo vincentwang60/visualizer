@@ -19,7 +19,7 @@ out vec4 fragColor;
 vec3 hsv2rgb(vec3 c, vec3 target_c) {
     vec3 p = abs(fract(c.x + vec3(1.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0) - 1.0;
     p = c.z * mix(vec3(1.0), clamp(p, 0.0, 1.0), c.y);
-    return mix(target_c, p, 0.3);
+    return mix(target_c * 1.2, p, 0.3);
 }
 
 float smoothMin(float a, float b, float k) {
@@ -27,14 +27,15 @@ float smoothMin(float a, float b, float k) {
     return mix(b, a, h) - k * h * (1.0 - h);
 }
 
-vec2 watercolor_noise(vec2 _uv, float time_seed, int num_iterations) {
+vec2 watercolor_noise(vec2 _uv, float time, int num_iterations, float seed) {
+    float safe_time = mod(time, 2.0 * PI) + seed;
     for (int i = 1; i < num_iterations; i++) {
-        float factor = 1.0 / float(i);
+        float factor = 1. / float(i);
         float freq = float(i) * 2.5;
-        float sin_val = sin(freq * _uv.y + time_seed);
-        float cos_val = cos(freq * _uv.x + time_seed);
-        _uv.x += factor * sin_val;
-        _uv.y += factor * cos_val;
+        float sin_val = sin(freq * _uv.y + safe_time);
+        float cos_val = cos(freq * _uv.x + safe_time);
+        _uv.x += factor * sin_val + seed;
+        _uv.y += factor * cos_val + 1. / seed;
     }
     return _uv;
 }
@@ -49,6 +50,24 @@ vec2 posFromCenter(int i, vec2 frag_coord, float aspect_offset, vec2 resolution_
     return pos;
 }
 
+float computeDistanceField(vec2 frag_coord, float aspect_offset, vec2 resolution_ratio, int num_bubbles) {
+    float d = 10000.0;
+    float blending_factor = 0.03;
+    
+    for (int i = 0; i < MAX_BUBBLES; i++) {
+        if (i >= num_bubbles) break;
+        
+        vec2 pos = posFromCenter(i, frag_coord, aspect_offset, resolution_ratio);
+        float len = length(pos);
+        float radius = u_bubbleRadii[i];
+        float di = len - radius;
+        
+        if (di > blending_factor) continue;
+        d = smoothMin(d, di, blending_factor);
+    }
+    return d;
+}
+
 vec2 rotateGlobe(float seed, vec2 pos, float radius) {    
     float z = sqrt(max(radius * radius - dot(pos, pos), 0.0));
     vec3 sphere_pos = vec3(pos, z) / radius;
@@ -57,7 +76,7 @@ vec2 rotateGlobe(float seed, vec2 pos, float radius) {
     
     return vec2(
         atan(rotated.x, rotated.z) * INV_2PI + 0.5,
-        acos(clamp(rotated.y, -1.0, 1.0)) * INV_PI
+        (rotated.y + 1.0) * 0.5
     );
 }
 
@@ -65,9 +84,8 @@ void main() {
     float edge_thickness = 0.003;
     float inner_fade_distance = 0.02;
     float blending_factor = 0.03;
-    float flow_factor = .8;
+    float flow_factor = 0.5;
     
-    float interior_weight = 0.0;
     float outline_weight = 0.0;
     vec3 final_color = vec3(0.0);
     vec2 frag_coord = gl_FragCoord.xy;
@@ -77,13 +95,13 @@ void main() {
     vec2 resolution_ratio = vec2(u_resolution.x / u_resolution.y, 1.0);
     float aspect_offset = 0.5 * (1.0 - u_resolution.y / u_resolution.x);
 
+    float animation_time = u_time * flow_factor;
+
     for (int i = 0; i < MAX_BUBBLES; i++) {
         if (i >= num_bubbles) break;
-        float time_seed = u_time * flow_factor * (.5 + u_bubbleSeeds[i]);
         vec3 target_color = u_bubbleColors[i];
         vec2 pos = posFromCenter(i, frag_coord, aspect_offset, resolution_ratio);
 
-        // Signed distance to smoothed edge: positive for outside, negative for inside
         float len = length(pos);
         float radius = u_bubbleRadii[i];
         float di = len - radius;
@@ -91,28 +109,44 @@ void main() {
 
         d = smoothMin(d, di, blending_factor);
 
+        if (length(pos) > radius) {
+            pos = normalize(pos) * radius;
+        }
         vec2 globe_uv = rotateGlobe(u_bubbleSeeds[i], pos, radius);
         vec2 sphere_pos = vec2(cos(globe_uv.x * 2.0 * PI), sin(globe_uv.x * 2.0 * PI) + globe_uv.y * 2.0);
-        vec2 mask_uv = watercolor_noise(sphere_pos, time_seed, 4);
-        vec3 outline_color = hsv2rgb(vec3(fract((mask_uv.x + mask_uv.y) * 0.15 + u_time * 0.5 + time_seed), 0.6, 1.0), target_color);
-        float outline = 1.0 - smoothstep(0.0, 1., di);
+        vec2 mask_uv = watercolor_noise(sphere_pos, animation_time, 4, u_bubbleSeeds[i]);
+        vec3 outline_color = hsv2rgb(vec3(fract((mask_uv.x + mask_uv.y) * 0.15), .7, 1.0), target_color);
+        float outline = 1.0 - di / blending_factor;
+
         final_outline_color += outline_color * outline;
         outline_weight += outline;
 
         vec2 color_uv = mask_uv * mask_uv;
-        vec3 interior = hsv2rgb(vec3(fract((color_uv.x + color_uv.y) * 0.15 + u_time * 0.5 + time_seed), 0.4, 1.0), target_color);
-        interior *= smoothstep(0.98, 1.0, sin(dot(mask_uv, vec2(1.2, 1.7))));
-        float interior_contribution = .5 *clamp(-di / (radius + 1e-6), 0.0, 1.0);
-        final_color += interior * interior_contribution;
-        interior_weight += interior_contribution;
+        vec3 interior = hsv2rgb(vec3(fract((color_uv.x + color_uv.y) * u_bubbleSeeds[i]), 1., 1.0), target_color);
+        interior *= smoothstep(0.90 + u_bubbleSeeds[i] * 0.1, 1.0, sin(dot(mask_uv, vec2(1.2 + u_bubbleSeeds[i] * 0.1, 1.7 - u_bubbleSeeds[i] * 0.1))));
+        float interior_strength = clamp(-di / (radius + 1e-6), 0.0, 1.0);
+        final_color += interior * interior_strength;
     }
     final_outline_color = final_outline_color / max(outline_weight, 1e-5);
     float abs_d = abs(d);
     float outline = 1.0 - smoothstep(0.0, edge_thickness, abs_d);
     
-    float inner_mask = .5 * smoothstep(-inner_fade_distance, 0.0, d) * step(d, 0.0);
     
+
+    float inner_mask = .5 * smoothstep(-inner_fade_distance, 0.0, d) * step(d, 0.0);
     vec3 color = mix(final_color, final_outline_color, outline);
-    color = mix(color, final_outline_color, inner_mask);
+    color = mix(color, final_outline_color, inner_mask);    
+    if (abs_d < edge_thickness && d < 0.0) {
+        float eps = 2.0;
+        float fx = computeDistanceField(frag_coord + vec2(eps, 0.0), aspect_offset, resolution_ratio, num_bubbles) - d;
+        float fy = computeDistanceField(frag_coord + vec2(0.0, eps), aspect_offset, resolution_ratio, num_bubbles) - d;
+        vec2 grad = normalize(vec2(fx, fy));
+        
+        vec2 light_dir = normalize(vec2(0.5 + sin(u_time * 0.1), 0.5 + cos(u_time * 0.1)));
+        float dot_product = max(dot(grad, light_dir), 0.0);
+        float specular = 1. + max(0.0, (dot_product - 0.9) / 0.1);
+        specular = specular * specular * specular;
+        color *= max(specular, 1.0);
+    }    
     fragColor = vec4(color, 1.0);
 }

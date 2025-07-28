@@ -25,7 +25,7 @@ class BubbleVisualizer : Visualizer {
             angularVelocity += (Random.nextFloat() - 1f) * 0.001f
             angularVelocity = angularVelocity.coerceIn(-0.02f..0.02f)
             angle += if (clockwiseSpin) angularVelocity else -angularVelocity
-            radius = 0.07f + 0.02f * sin((time + seed * 1000f)) // increased base size and amplitude
+            radius = 0.07f + 0.02f * sin((time + seed * 1000f))
         }
     }
 
@@ -33,7 +33,6 @@ class BubbleVisualizer : Visualizer {
         override val vertexShaderFile: String = "shaders/bubble-vertex.glsl"
         override val fragmentShaderFile: String = "shaders/bubble-fragment.glsl"
 
-        // Uniform handles
         private var resolutionHandle = 0
         private var timeHandle = 0
         private var numBubblesHandle = 0
@@ -44,15 +43,26 @@ class BubbleVisualizer : Visualizer {
 
         private val numBubbles = 6
         private val bubbles: List<Bubble>
-        private val startTime = System.nanoTime()
-        private var lastDrawTimeNanos: Long = 0L
+        private val startTime = System.currentTimeMillis()
+        private var lastDrawTimeMillis: Long = 0L
+        private var cachedTime: Float = 0f
+        private var lastTimeUpdate: Long = 0L
+
+        private val bubbleColors = FloatArray(MAX_BUBBLES * 3)
+        private val bubbleRadii = FloatArray(MAX_BUBBLES)
+        private val bubblePositions = FloatArray(MAX_BUBBLES * 2)
+        private val bubbleSeeds = FloatArray(MAX_BUBBLES)
 
         init {
             bubbles = List(numBubbles) {
                 val angle = Random.nextFloat() * (2f * Math.PI).toFloat()
                 val angularVelocity = (Random.nextFloat() - 0.5f) * 0.08f
                 Bubble(
-                    color = floatArrayOf(Random.nextFloat(), Random.nextFloat(), Random.nextFloat()),
+                    color = floatArrayOf(
+                        .4f + Random.nextFloat() * (1f - .4f),
+                        .4f + Random.nextFloat() * (1f - .4f),
+                        .4f + Random.nextFloat() * (1f - .4f)
+                    ),
                     radius = 0.07f,
                     angle = angle,
                     angularVelocity = angularVelocity,
@@ -62,7 +72,6 @@ class BubbleVisualizer : Visualizer {
         }
 
         override fun onSurfaceCreatedExtras(gl: GL10?, config: EGLConfig?) {
-            // Get uniform locations - check for -1 to debug
             resolutionHandle = GLES30.glGetUniformLocation(program, "u_resolution")
             timeHandle = GLES30.glGetUniformLocation(program, "u_time")
             numBubblesHandle = GLES30.glGetUniformLocation(program, "u_numBubbles")
@@ -70,66 +79,50 @@ class BubbleVisualizer : Visualizer {
             bubbleRadiiHandle = GLES30.glGetUniformLocation(program, "u_bubbleRadii")
             bubblePositionsHandle = GLES30.glGetUniformLocation(program, "u_bubblePositions")
             bubbleSeedsHandle = GLES30.glGetUniformLocation(program, "u_bubbleSeeds")
-
-            // Debug: Log uniform locations
-            println("BubbleVisualizer uniform locations:")
-            println("  u_resolution: $resolutionHandle")
-            println("  u_time: $timeHandle")
-            println("  u_numBubbles: $numBubblesHandle")
-            println("  u_bubbleColors: $bubbleColorsHandle")
-            println("  u_bubbleRadii: $bubbleRadiiHandle")
-            println("  u_bubblePositions: $bubblePositionsHandle")
-            println("  u_bubbleSeeds: $bubbleSeedsHandle")
         }
 
         override fun onDrawFrameExtras(gl: GL10?) {
-            // Frame rate limiting
-            val nowNanos = System.nanoTime()
-            if (lastDrawTimeNanos != 0L) {
-                val elapsedMs = (nowNanos - lastDrawTimeNanos) / 1_000_000
-                if (elapsedMs < 33) return // 10 FPS cap
+            val nowMillis = System.currentTimeMillis()
+            
+            if (nowMillis - lastTimeUpdate > 16L) {
+                cachedTime = (nowMillis - startTime) / 1000.0f
+                lastTimeUpdate = nowMillis
             }
-            lastDrawTimeNanos = nowNanos
+            
+            if (lastDrawTimeMillis != 0L) {
+                val elapsedMs = nowMillis - lastDrawTimeMillis
+                if (elapsedMs < 16) return
+            }
+            lastDrawTimeMillis = nowMillis
 
-            // Set basic uniforms
             if (resolutionHandle >= 0) {
                 GLES30.glUniform2f(resolutionHandle, width.toFloat(), height.toFloat())
             }
 
-            val time = (System.nanoTime() - startTime) / 1_000_000_000.0f
             if (timeHandle >= 0) {
-                GLES30.glUniform1f(timeHandle, time)
+                GLES30.glUniform1f(timeHandle, cachedTime)
             }
 
             if (numBubblesHandle >= 0) {
                 GLES30.glUniform1f(numBubblesHandle, numBubbles.toFloat())
             }
 
-            // Update bubble animations
-            bubbles.forEach { it.update(time) }
-
-            // Prepare bubble data arrays (matching OSC testing code)
-            val bubbleColors = FloatArray(numBubbles * 3)
-            val bubbleRadii = FloatArray(numBubbles)
-            val bubblePositions = FloatArray(numBubbles * 2)
-            val bubbleSeeds = FloatArray(numBubbles)
+            bubbles.forEach { it.update(cachedTime) }
 
             for (i in 0 until numBubbles) {
                 val bubble = bubbles[i]
-                // Use normalized coordinates (0-1 range)
-                val x = 0.5f + 0.18f * cos(bubble.angle) // increased distance from center
+                val x = 0.5f + 0.18f * cos(bubble.angle)
                 val y = 0.5f + 0.18f * sin(bubble.angle)
 
                 bubbleColors[i * 3] = bubble.color[0]
                 bubbleColors[i * 3 + 1] = bubble.color[1]
                 bubbleColors[i * 3 + 2] = bubble.color[2]
                 bubbleRadii[i] = bubble.radius
-                bubblePositions[i * 2] = x // Keep normalized (0-1)
-                bubblePositions[i * 2 + 1] = y // Keep normalized (0-1)
+                bubblePositions[i * 2] = x
+                bubblePositions[i * 2 + 1] = y
                 bubbleSeeds[i] = bubble.seed
             }
 
-            // Set uniform arrays - check handles first
             if (bubblePositionsHandle >= 0) {
                 GLES30.glUniform2fv(bubblePositionsHandle, numBubbles, bubblePositions, 0)
             }
@@ -143,7 +136,6 @@ class BubbleVisualizer : Visualizer {
                 GLES30.glUniform1fv(bubbleSeedsHandle, numBubbles, bubbleSeeds, 0)
             }
 
-            // Check for OpenGL errors
             val error = GLES30.glGetError()
             if (error != GLES30.GL_NO_ERROR) {
                 println("OpenGL error in BubbleVisualizer: $error")

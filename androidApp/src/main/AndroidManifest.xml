@@ -16,4 +16,4 @@
         </activity>
         <profileable android:enabled="true" />
     </application>
-</manifest>     
+</manifest>

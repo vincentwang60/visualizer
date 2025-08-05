@@ -1,7 +1,13 @@
 package com.musicvisualizer.android.audio
 
+import android.media.audiofx.Visualizer
+import android.util.Log
 import kotlin.random.Random
 import kotlin.math.*
+
+interface AudioEventListener {
+    fun onAudioEvent(event: AudioEvent)
+}
 
 /**
  * Audio analysis data extracted from real-time audio stream
@@ -15,124 +21,259 @@ data class AudioEvent(
     val spectralCentroid: Float = 0f,      // "Brightness" - where most energy is (0.0-1.0)
     val mfcc: FloatArray? = null,          // Mel-frequency cepstral coefficients (timbre)
     val harmonicity: Float = 0f            // How harmonic vs noisy (0.0-1.0)
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-        other as AudioEvent
-        return beatIntensity == other.beatIntensity &&
-                bass == other.bass &&
-                mid == other.mid &&
-                treble == other.treble &&
-                volume == other.volume &&
-                spectralCentroid == other.spectralCentroid &&
-                mfcc.contentEquals(other.mfcc) &&
-                harmonicity == other.harmonicity
-    }
+)
 
-    override fun hashCode(): Int {
-        return listOf(
-            beatIntensity, bass, mid, treble, volume,
-            spectralCentroid, mfcc.contentHashCode(), harmonicity
-        ).hashCode()
-    }
+/**
+ * Interface that defines the contract for all audio analyzers
+ */
+interface AudioAnalyzer {
+    fun addListener(listener: AudioEventListener)
+    fun removeListener(listener: AudioEventListener)
+    fun start(vararg params: Any)
+    fun stop()
+    fun isRunning(): Boolean
 }
 
 /**
- * Interface for audio event listeners
+ * Base class for audio analyzers that provides common functionality
  */
-interface AudioEventListener {
-    fun onAudioEvent(event: AudioEvent)
-}
+abstract class BaseAudioAnalyzer : AudioAnalyzer {
+    protected val listeners = mutableListOf<AudioEventListener>()
+    protected var running = false
 
-/**
- * Mock audio analyzer that generates plausible real-time audio events
- * In production, this would analyze actual audio stream data
- */
-class MockAudioAnalyzer {
-    private val listeners = mutableListOf<AudioEventListener>()
-    private var isRunning = false
-    private var lastBeatTime = 0L
-    private var currentBpm = 120f
-    private var bassSmooth = 0f
-    private var midSmooth = 0f
-    private var trebleSmooth = 0f
-    private var volumeSmooth = 0f
-    
-    // Simulation parameters
-    private val smoothingFactor = 0.15f
-    
-    fun addListener(listener: AudioEventListener) {
+    override fun addListener(listener: AudioEventListener) {
         listeners.add(listener)
     }
-    
-    fun removeListener(listener: AudioEventListener) {
+
+    override fun removeListener(listener: AudioEventListener) {
         listeners.remove(listener)
     }
-    
-    fun start() {
-        isRunning = true
+
+    override fun isRunning(): Boolean = running
+
+    protected fun notifyListeners(event: AudioEvent) {
+        listeners.forEach { it.onAudioEvent(event) }
+    }
+}
+
+/**
+ * Real-time audio analyzer using Android's Visualizer API.
+ */
+class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
+    private var visualizer: Visualizer? = null
+
+    // Audio capture parameters
+    private val captureSize = 128 // Small size for just volume analysis
+
+    /**
+     * Start analyzing audio from the given MediaPlayer session
+     * @param params expects audioSessionId: Int
+     */
+    override fun start(vararg params: Any) {
+        if (running) {
+            Log.w("RealTimeAudioAnalyzer", "Already running")
+            return
+        }
+        if (params.isEmpty() || params[0] !is Int) {
+            Log.e("RealTimeAudioAnalyzer", "audioSessionId (Int) required")
+            return
+        }
+        val audioSessionId = params[0] as Int
+
+        try {
+            // Create visualizer for the MediaPlayer's audio session
+            visualizer = Visualizer(audioSessionId).apply {
+                captureSize = this@RealTimeAudioAnalyzer.captureSize
+
+                // Set up waveform capture listener for volume analysis
+                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
+                    override fun onWaveFormDataCapture(
+                        visualizer: Visualizer?,
+                        waveform: ByteArray?,
+                        samplingRate: Int
+                    ) {
+                        waveform?.let { analyzeWaveform(it) }
+                    }
+
+                    override fun onFftDataCapture(
+                        visualizer: Visualizer?,
+                        fft: ByteArray?,
+                        samplingRate: Int
+                    ) {
+                        // Not used for volume-only analysis
+                    }
+                }, Visualizer.getMaxCaptureRate() / 2, true, false) // Only capture waveform
+
+                enabled = true
+            }
+
+            running = true
+            Log.d("RealTimeAudioAnalyzer", "Started volume analysis")
+
+        } catch (e: Exception) {
+            Log.e("RealTimeAudioAnalyzer", "Failed to start audio analyzer", e)
+        }
+    }
+
+    override fun stop() {
+        running = false
+        visualizer?.apply {
+            enabled = false
+            release()
+        }
+        visualizer = null
+        Log.d("RealTimeAudioAnalyzer", "Stopped volume analysis")
+    }
+
+    private fun analyzeWaveform(waveform: ByteArray) {
+        if (!running) return
+
+        // Calculate RMS (Root Mean Square) for volume
+        var sum = 0.0
+        for (byte in waveform) {
+            val sample = (byte.toInt() - 128) / 128.0 // Convert to -1.0 to 1.0 range
+            sum += sample * sample
+        }
+
+        val rms = sqrt(sum / waveform.size)
+        val volume = (rms * 2.0).coerceIn(0.0, 1.0).toFloat() // Scale and clamp to 0-1
+
+        // Create simple audio event with only volume
+        val audioEvent = AudioEvent(
+            beatIntensity = 0f,
+            bass = 0f,
+            mid = 0f,
+            treble = 0f,
+            volume = volume,
+            spectralCentroid = 0f,
+            mfcc = null,
+            harmonicity = 0f
+        )
+
+        // Notify all listeners
+        notifyListeners(audioEvent)
+    }
+}
+
+/**
+ * Simplified mock audio analyzer that generates realistic beat intensity patterns
+ * All other audio parameters are set to zero for simplicity
+ */
+class MockAudioAnalyzer : BaseAudioAnalyzer() {
+    private val startTime = System.currentTimeMillis()
+
+    // Beat simulation parameters
+    private val bpm = 128f // Beats per minute (typical dance music)
+    private val beatsPerMeasure = 4
+
+    override fun start(vararg params: Any) {
+        running = true
         simulateAudioStream()
     }
-    
-    fun stop() {
-        isRunning = false
+
+    override fun stop() {
+        running = false
     }
-    
+
     private fun simulateAudioStream() {
         Thread {
-            while (isRunning) {
+            while (running) {
                 val event = generateMockAudioEvent()
-                listeners.forEach { it.onAudioEvent(event) }
-                Thread.sleep(16) // ~60 FPS audio analysis
+                notifyListeners(event)
+                Thread.sleep(32) // ~30 FPS audio analysis
             }
         }.start()
     }
-    
+
     private fun generateMockAudioEvent(): AudioEvent {
-        val time = System.currentTimeMillis()
-        
-        // Simulate varying music with some structure
-        val musicTime = time / 1000f
-        val musicPhase = (musicTime * currentBpm / 60f) % 4f // 4-beat measure
-        
-        // Generate raw values with musical structure
-        val rawBass = (sin(musicTime * 0.5f) * 0.5f + 0.5f) * 
-                     (0.3f + 0.7f * sin(musicPhase * PI.toFloat() / 2f).pow(2))
-        val rawMid = (sin(musicTime * 0.8f + 1f) * 0.5f + 0.5f) *
-                    (0.4f + 0.6f * cos(musicPhase * PI.toFloat() / 4f).pow(2))
-        val rawTreble = (sin(musicTime * 1.2f + 2f) * 0.5f + 0.5f) *
-                       (0.2f + 0.8f * sin(musicPhase * PI.toFloat()).pow(4))
-        val rawVolume = (rawBass + rawMid + rawTreble) / 3f
-        
-        // Apply smoothing (simulates real audio analysis)
-        bassSmooth = bassSmooth * (1f - smoothingFactor) + rawBass * smoothingFactor
-        midSmooth = midSmooth * (1f - smoothingFactor) + rawMid * smoothingFactor
-        trebleSmooth = trebleSmooth * (1f - smoothingFactor) + rawTreble * smoothingFactor
-        volumeSmooth = volumeSmooth * (1f - smoothingFactor) + rawVolume * smoothingFactor
-        
-        // Beat detection simulation
-        val beatPattern = sin(musicPhase * PI.toFloat() / 2f).pow(6) // Strong on beats 1 and 3
-        val beatIntensity = (beatPattern * volumeSmooth).coerceIn(0f, 1f)
-        
-        // Additional features
-        val spectralCentroid = (midSmooth * 0.4f + trebleSmooth * 0.6f).coerceIn(0f, 1f)
-        val harmonicity = ((bassSmooth + midSmooth) / 2f * (1f - trebleSmooth * 0.5f)).coerceIn(0f, 1f)
-        
-        // Simple MFCC simulation (12 coefficients)
-        val mfcc = FloatArray(12) { i ->
-            (sin(musicTime * (i + 1) * 0.3f) * 0.5f + 0.5f) * volumeSmooth
-        }
-        
+        val currentTime = System.currentTimeMillis()
+        val elapsedSeconds = (currentTime - startTime) / 1000f
+
+        // Calculate beat position within a measure (0.0 to 4.0)
+        val beatPosition = (elapsedSeconds * bpm / 60f) % beatsPerMeasure
+
+        // Generate realistic beat intensity pattern
+        val beatIntensity = calculateBeatIntensity(beatPosition, elapsedSeconds)
+
         return AudioEvent(
             beatIntensity = beatIntensity,
-            bass = bassSmooth.coerceIn(0f, 1f),
-            mid = midSmooth.coerceIn(0f, 1f),
-            treble = trebleSmooth.coerceIn(0f, 1f),
-            volume = volumeSmooth.coerceIn(0f, 1f),
-            spectralCentroid = spectralCentroid,
-            mfcc = mfcc,
-            harmonicity = harmonicity
+            bass = 0f,
+            mid = 0f,
+            treble = 0f,
+            volume = 0f,
+            spectralCentroid = 0f,
+            mfcc = null,
+            harmonicity = 0f
         )
+    }
+
+    private fun calculateBeatIntensity(beatPosition: Float, elapsedSeconds: Float): Float {
+        // Create different intensity patterns for different beats in a measure
+        val beatInMeasure = (beatPosition % beatsPerMeasure).toInt()
+        val fractionalBeat = beatPosition % 1f
+
+        // Strong beats on 1 and 3, weaker on 2 and 4 (typical dance pattern)
+        val baseBeatStrength = when (beatInMeasure) {
+            0 -> 1.0f      // Beat 1 - strongest (kick drum)
+            1 -> 0.4f      // Beat 2 - weaker 
+            2 -> 0.8f      // Beat 3 - strong (kick drum)
+            3 -> 0.4f      // Beat 4 - weaker
+            else -> 0.3f
+        }
+
+        // Create sharp attack and quick decay (like real drum hits)
+        val beatPulse = when {
+            fractionalBeat < 0.1f -> {
+                // Sharp attack in first 10% of beat
+                val attack = fractionalBeat / 0.1f
+                attack * attack // Quadratic attack
+            }
+            fractionalBeat < 0.3f -> {
+                // Quick decay for next 20%
+                val decay = (fractionalBeat - 0.1f) / 0.2f
+                1f - (decay * decay * 0.8f) // Leave some sustain
+            }
+            else -> {
+                // Low sustain for rest of beat
+                0.2f
+            }
+        }
+
+        // Add some musical variation over time (builds, drops, etc.)
+        val musicVariation = getMusicVariation(elapsedSeconds)
+
+        // Add subtle randomness for realism (±10%)
+        val randomVariation = 1f + (Random.nextFloat() - 0.5f) * 0.2f
+
+        val finalIntensity = baseBeatStrength * beatPulse * musicVariation * randomVariation
+
+        return finalIntensity.coerceIn(0f, 1f)
+    }
+
+    private fun getMusicVariation(elapsedSeconds: Float): Float {
+        // Simulate musical structure with builds and drops every ~32 seconds
+        val musicCycle = elapsedSeconds / 32f
+        val cyclePosition = musicCycle % 1f
+
+        return when {
+            cyclePosition < 0.6f -> {
+                // Normal energy for first 60% of cycle
+                0.7f + 0.3f * sin(cyclePosition * PI.toFloat() * 2f)
+            }
+            cyclePosition < 0.8f -> {
+                // Build up energy
+                val buildPosition = (cyclePosition - 0.6f) / 0.2f
+                0.7f + buildPosition * 0.4f
+            }
+            cyclePosition < 0.9f -> {
+                // Peak energy (drop)
+                1.1f
+            }
+            else -> {
+                // Quick fade back to normal
+                val fadePosition = (cyclePosition - 0.9f) / 0.1f
+                1.1f - fadePosition * 0.4f
+            }
+        }
     }
 }

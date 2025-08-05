@@ -11,7 +11,7 @@ import com.musicvisualizer.android.visualizers.Visualizer
  * A placeholder visualizer that displays a blue background with a random color circle in the center using OpenGL ES 3.0.
  */
 class CircleColorVisualizer : Visualizer {
-    override fun createRenderer(context: android.content.Context): Renderer = CircleColorRenderer(context)
+    override fun createRenderer(context: android.content.Context, audioAnalyzer: com.musicvisualizer.android.audio.AudioAnalyzer): Renderer = CircleColorRenderer(context)
 
     private class CircleColorRenderer(context: android.content.Context) : BaseVisualizerRenderer(context) {
         override val vertexShaderFile: String = "shaders/circle-vertex.glsl"

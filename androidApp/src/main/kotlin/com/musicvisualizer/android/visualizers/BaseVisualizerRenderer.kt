@@ -3,6 +3,9 @@ package com.musicvisualizer.android.visualizers
 import android.content.Context
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView.Renderer
+import com.musicvisualizer.android.audio.MockAudioAnalyzer
+import com.musicvisualizer.android.audio.AudioEvent
+import com.musicvisualizer.android.audio.AudioEventListener
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -11,10 +14,10 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
 interface Visualizer {
-    fun createRenderer(context: Context): Renderer
+    fun createRenderer(context: Context, audioAnalyzer: com.musicvisualizer.android.audio.AudioAnalyzer): Renderer
 }
 
-abstract class BaseVisualizerRenderer(private val context: Context) : Renderer {
+abstract class BaseVisualizerRenderer(private val context: Context) : Renderer, AudioEventListener {
 
     protected var program: Int = 0
     protected var positionHandle: Int = 0
@@ -30,6 +33,19 @@ abstract class BaseVisualizerRenderer(private val context: Context) : Renderer {
 
     protected abstract val vertexShaderFile: String
     protected abstract val fragmentShaderFile: String
+
+    // Audio analyzer integration
+    private val audioAnalyzer = MockAudioAnalyzer()
+    protected var latestAudioEvent: AudioEvent? = null
+
+    init {
+        audioAnalyzer.addListener(this)
+        audioAnalyzer.start()
+    }
+
+    override fun onAudioEvent(event: AudioEvent) {
+        latestAudioEvent = event
+    }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         val vertexSource = context.assets.open(vertexShaderFile).bufferedReader().use { it.readText() }
@@ -111,5 +127,7 @@ abstract class BaseVisualizerRenderer(private val context: Context) : Renderer {
             GLES30.glDeleteProgram(program)
             program = 0
         }
+        audioAnalyzer.stop()
+        audioAnalyzer.removeListener(this)
     }
 }

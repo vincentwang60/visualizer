@@ -12,7 +12,7 @@ import kotlin.math.cos
 // const val MAX_BUBBLES = 10  // Removed to avoid conflict
 
 class BubbleVisualizerOSC : Visualizer {
-    override fun createRenderer(context: android.content.Context): Renderer = BubbleRenderer(context)
+    override fun createRenderer(context: android.content.Context, audioAnalyzer: com.musicvisualizer.android.audio.AudioAnalyzer): Renderer = BubbleRenderer(context)
     
     private data class Bubble(
         var color: FloatArray,

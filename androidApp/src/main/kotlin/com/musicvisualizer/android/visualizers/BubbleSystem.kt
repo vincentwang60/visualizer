@@ -21,9 +21,11 @@ data class BubbleConfig(
     val maxOrbitRadius: Float = 0.50f,
     val orbitSpeed: Float = 0.01f,
     val angularVelocityAmplitude: Float = 0.01f,
-    val orbitDecayRate: Float = 0.01f,
-    val beatSmoothingRate: Float = 0.1f,
-    val lightPosition: Pair<Float, Float> = Pair(0.2f, 0.8f)
+    val orbitDecayRate: Float = 0.025f, // Balanced between old and new
+    val beatSmoothingRate: Float = 0.25f, // Reduced from 0.4f for less jitter
+    val lightPosition: Pair<Float, Float> = Pair(0.2f, 0.8f),
+    val instantReactionStrength: Float = 0.05f, // Reduced from 0.3f
+    val beatThreshold: Float = 0.15f // New: higher threshold for instant reactions
 )
 
 private data class Bubble(
@@ -36,7 +38,8 @@ private data class Bubble(
     var position: Pair<Float, Float> = Pair(0f, 0f),
     var orbitRadius: Float = config.maxOrbitRadius / 4f,
     var targetOrbitRadius: Float = config.maxOrbitRadius / 4f,
-    var smoothedBeatIntensity: Float = 0f
+    var smoothedBeatIntensity: Float = 0f,
+    var lastBeatIntensity: Float = 0f // Track previous frame for instant reactions
 ) {    
     fun update(time: Float, audioEvent: AudioEvent?) {
         val angularVelocity = config.orbitSpeed + config.angularVelocityAmplitude * (sin(time + seed * 5.0f) * 0.5f + 0.5f)
@@ -44,16 +47,32 @@ private data class Bubble(
         angle += if (clockwiseSpin) angularVelocity else -angularVelocity
         radius = config.baseRadius + config.radiusVariation * sin(time + seed * 5.0f)
 
-        // Smooth the beat intensity for less jumpy response
-        audioEvent?.let {
-            smoothedBeatIntensity = smoothedBeatIntensity * (1f - config.beatSmoothingRate) + it.beatIntensity * config.beatSmoothingRate
+        audioEvent?.let { audio ->
+            // 1. Instant reaction only to significant beat spikes
+            val beatDelta = audio.beatIntensity - lastBeatIntensity
+            val instantReaction = if (beatDelta > config.beatThreshold) {
+                beatDelta * config.instantReactionStrength
+            } else 0f
+            
+            // 2. Moderate smoothing with clamping to prevent over-reaction
+            val targetSmoothed = smoothedBeatIntensity * (1f - config.beatSmoothingRate) + 
+                               audio.beatIntensity * config.beatSmoothingRate
+            smoothedBeatIntensity = targetSmoothed.coerceIn(0f, 1f)
+            
+            // 3. Combine with limited instant response
+            val combinedIntensity = (smoothedBeatIntensity + instantReaction).coerceIn(0f, 1f)
+            
             val reactivity = 1f - (radius - config.baseRadius) / config.radiusVariation * 3f
-            targetOrbitRadius = config.baseOrbitRadius + smoothedBeatIntensity * reactivity * (config.maxOrbitRadius - config.baseOrbitRadius)
+            targetOrbitRadius = config.baseOrbitRadius + combinedIntensity * reactivity * 
+                              (config.maxOrbitRadius - config.baseOrbitRadius)
+            
+            lastBeatIntensity = audio.beatIntensity
         }
         
-        orbitRadius = orbitRadius * (1f - 2.0f *config.orbitDecayRate) + targetOrbitRadius * config.orbitDecayRate
+        // Moderate orbit radius interpolation
+        val lerpSpeed = config.orbitDecayRate * 1.5f // Reduced from 2.0f multiplier
+        orbitRadius = orbitRadius * (1f - lerpSpeed) + targetOrbitRadius * lerpSpeed
         if (targetOrbitRadius <= config.baseOrbitRadius) targetOrbitRadius = config.baseOrbitRadius
-
         position = Pair(
             0.5f + orbitRadius * cos(angle),
             0.5f + orbitRadius * sin(angle)
@@ -61,9 +80,15 @@ private data class Bubble(
     }
     
     fun getColor(time: Float, audioEvent: AudioEvent?): FloatArray {
+        // Gentle color brightness response to audio
+        val baseBrightness = 1.0f
+        val audioBrightness = audioEvent?.let { audio ->
+            baseBrightness + (audio.beatIntensity * 0.1f) // Reduced from 0.2f for subtlety
+        } ?: baseBrightness
+        
         val hue = cos(time / 8.0f + seed * 5.0f) * 180f + 180f
         val saturation = (config.saturation + 0.3f * sin(time + seed * 5.0f)) % 1.0f
-        val value = 1.0f
+        val value = (audioBrightness).coerceIn(0f, 1f)
 
         val hsv = floatArrayOf(hue, saturation, value)
         val argbColor = Color.HSVToColor(hsv)
@@ -95,7 +120,6 @@ class BubbleSystem(
 
     init {
         audioAnalyzer.addListener(this)
-        audioAnalyzer.start()
     }
 
     override fun onAudioEvent(event: AudioEvent) {
@@ -105,8 +129,8 @@ class BubbleSystem(
     fun update(): Float {
         val now = System.nanoTime()
         
-        // Update time cache
-        if (now - lastTimeUpdate > FRAME_TIME_NS) {
+        // Reduce time caching delay - update every 8ms instead of 16ms for smoother response
+        if (now - lastTimeUpdate > FRAME_TIME_NS / 2) {
             cachedTime = ((now - startTime) / 1_000_000_000f) % (16f * PI.toFloat())
             lastTimeUpdate = now
         }

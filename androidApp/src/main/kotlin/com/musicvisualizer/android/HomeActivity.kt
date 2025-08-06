@@ -87,12 +87,10 @@ class Home : Activity() {
         mediaPlayer = MediaPlayer.create(this, R.raw.raven)
         mediaPlayer?.let { player ->
             player.isLooping = true
-            player.start()
-            
-            // Start real-time audio analysis with the MediaPlayer's session ID
-            audioAnalyzer.start(player.audioSessionId)
-            
-            Log.d("Home", "Started playing raven.mp3 and audio analysis")
+            player.setOnPreparedListener {
+                player.start()
+                audioAnalyzer.start(player.audioSessionId)
+            }
         }
     }
 

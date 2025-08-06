@@ -5,124 +5,139 @@ import android.util.Log
 import kotlin.math.*
 
 /**
- * Real-time audio analyzer using Android's Visualizer API.
- * Captures audio output from MediaPlayer without requiring microphone permissions.
+ * Audio analyzer with multiple normalization strategies for better visualization
  */
 class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     private var visualizer: Visualizer? = null
-
-    // Audio capture parameters
     private val captureSize = 1024
-    
-    // Beat detection state
-    private val energyHistory = mutableListOf<Float>()
-    private val maxHistorySize = 12 // ~400ms at 30fps
-    private var lastBeatTime = 0L
-    private val minBeatInterval = 300L // Minimum 300ms between beats
-    
-    // Frequency band ranges (for 1024 FFT at ~44kHz sample rate)
-    private val bassRange = 1..8        // ~20-250 Hz
-    private val midRange = 9..64        // ~250-4000 Hz  
-    private val trebleRange = 65..200   // ~4000+ Hz
 
+    // 8-band frequency ranges
+    private val bandRanges = arrayOf(
+        1..4,      // ~20-86 Hz (Sub-bass)
+        5..8,      // ~86-172 Hz (Bass)
+        9..16,     // ~172-344 Hz (Low-mid)
+        17..32,    // ~344-688 Hz (Mid)
+        33..64,    // ~688-1376 Hz (Upper-mid)
+        65..128,   // ~1376-2752 Hz (Presence)
+        129..256,  // ~2752-5504 Hz (Brilliance)
+        257..512   // ~5504-11008 Hz (Air)
+    )
+
+    // Strategy-specific state variables
+    private val processedBands = FloatArray(8)
+    
+    private val recentHistory = Array(8) { mutableListOf<Float>() }
+    private val maxRecentSamples = 50  // ~5 seconds at 10fps
+
+    private var lastPrintTime: Long? = null
+    
     companion object {
         private const val TAG = "RealTimeAudioAnalyzer"
     }
 
-    /**
-     * Start analyzing audio from the given MediaPlayer session
-     * @param params expects audioSessionId: Int
-     */
     override fun start(vararg params: Any) {
         if (running) return
-        
         val audioSessionId = params[0] as Int
-        
+
         visualizer = Visualizer(audioSessionId).apply {
             captureSize = this@RealTimeAudioAnalyzer.captureSize
             setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
-                override fun onWaveFormDataCapture(
-                    visualizer: Visualizer?,
-                    waveform: ByteArray?,
-                    samplingRate: Int
-                ) {
-                    // Not used - we'll use FFT instead
+                override fun onWaveFormDataCapture(visualizer: Visualizer?, waveform: ByteArray?, samplingRate: Int) {}
+                override fun onFftDataCapture(visualizer: Visualizer?, fft: ByteArray?, samplingRate: Int) {
+                    fft?.let { analyze8BandFFT(it, samplingRate) }
                 }
-
-                override fun onFftDataCapture(
-                    visualizer: Visualizer?,
-                    fft: ByteArray?,
-                    samplingRate: Int
-                ) {
-                    fft?.let { analyzeFft(it, samplingRate) }
-                }
-            }, Visualizer.getMaxCaptureRate() / 2, false, true)
-            
+            }, Visualizer.getMaxCaptureRate(), false, true)
             enabled = true
         }
 
         running = true
-        Log.d(TAG, "Started real-time audio analysis")
     }
 
     override fun stop() {
         running = false
-        visualizer?.apply {
-            enabled = false
-            release()
-        }
+        visualizer?.apply { enabled = false; release() }
         visualizer = null
-        Log.d(TAG, "Stopped real-time audio analysis")
+        resetState()
+        Log.d(TAG, "Stopped")
     }
 
-    private fun analyzeFft(fft: ByteArray, samplingRate: Int) {
+    private fun resetState() {
+        processedBands.fill(0f)
+        recentHistory.forEach { it.clear() }
+        lastPrintTime = null
+    }
+
+    private fun analyze8BandFFT(fft: ByteArray, samplingRate: Int) {
         if (!running) return
 
         val magnitudes = convertFftToMagnitudes(fft)
-        
-        // Calculate frequency band energies with bass weighting
-        val bassEnergy = calculateBandEnergy(magnitudes, bassRange) * 2f // Weight bass more heavily
-        val midEnergy = calculateBandEnergy(magnitudes, midRange)
-        val trebleEnergy = calculateBandEnergy(magnitudes, trebleRange)
-        val totalEnergy = bassEnergy + midEnergy + trebleEnergy
-        
-        // Normalize band energies (0.0-1.0)
-        val (bass, mid, treble) = normalizeBandEnergies(bassEnergy, midEnergy, trebleEnergy, totalEnergy)
-        val volume = (totalEnergy / 1500f).coerceIn(0f, 1f)
-        
-        // Beat detection using bass-weighted energy for better drum detection
-        val beatEnergy = bassEnergy + midEnergy * 0.5f
-        val normalizedBeatEnergy = beatEnergy / 1000f
-        val beatIntensity = detectBeat(normalizedBeatEnergy)
-        
-        // Calculate spectral centroid (brightness)
-        val spectralCentroid = calculateSpectralCentroid(magnitudes, samplingRate)
-        
-        val audioEvent = AudioEvent(
-            beatIntensity = beatIntensity,
-            bass = bass,
-            mid = mid,
-            treble = treble,
-            volume = volume,
-            spectralCentroid = spectralCentroid
-        )
+        val rawBands = FloatArray(8) { i -> calculateBandEnergy(magnitudes, bandRanges[i]) }
+        normalizeWithPercentile(rawBands)
 
-        notifyListeners(audioEvent)
+        // Only print debug output if at least 500ms have passed since last print
+        val now = System.currentTimeMillis()
+        if (lastPrintTime == null || now - lastPrintTime!! > 500) {
+            lastPrintTime = now
+            val arrayString = processedBands.joinToString(", ") { "%.3f".format(it) }
+            Log.d(TAG, "8-Band: [$arrayString]")
+        }
+        if (lastPrintTime == null || now - lastPrintTime!! > 500) {
+            lastPrintTime = now
+            val arrayString = processedBands.joinToString(", ") { "%.3f".format(it) }
+            Log.d(TAG, "8-Band: [$arrayString]")
+        }
+        
+        val volume = processedBands.average().toFloat()
+        
+        notifyListeners(AudioEvent(
+            fftTest = processedBands.copyOf(), 
+            volume = volume,
+        ))
     }
-    
+
+    private fun normalizeWithPercentile(rawBands: FloatArray) {
+        for (i in 0..7) {
+            // Maintain recent history
+            recentHistory[i].add(rawBands[i])
+            if (recentHistory[i].size > maxRecentSamples) {
+                recentHistory[i].removeAt(0)
+            }
+            
+            // Handle silence case first
+            if (rawBands[i] <= 0f) {
+                processedBands[i] = 0f
+                continue
+            }
+            
+            // Use 95th percentile as reference instead of max
+            val referenceValue = if (recentHistory[i].size >= 10) {
+                val sorted = recentHistory[i].sorted()
+                val percentileIndex = (sorted.size * 0.95f).toInt().coerceIn(0, sorted.size - 1)
+                val percentileValue = sorted[percentileIndex]
+                // Ensure reference value is not zero to avoid division by zero
+                if (percentileValue > 0f) percentileValue else 1f
+            } else {
+                rawBands[i].coerceAtLeast(1f)
+            }
+            
+            // Normalize with slight compression
+            val ratio = rawBands[i] / referenceValue
+            processedBands[i] = (ratio.pow(0.7f)).coerceIn(0f, 1f)
+        }
+    }
+
     private fun convertFftToMagnitudes(fft: ByteArray): FloatArray {
         val fftSize = fft.size / 2
         val magnitudes = FloatArray(fftSize)
-        
+
         for (i in 0 until fftSize) {
             val real = fft[i * 2].toFloat()
             val imag = fft[i * 2 + 1].toFloat()
             magnitudes[i] = sqrt(real * real + imag * imag)
         }
-        
         return magnitudes
     }
-    
+
     private fun calculateBandEnergy(magnitudes: FloatArray, range: IntRange): Float {
         var energy = 0f
         for (i in range) {
@@ -131,78 +146,5 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             }
         }
         return energy
-    }
-    
-    private fun normalizeBandEnergies(
-        bassEnergy: Float,
-        midEnergy: Float, 
-        trebleEnergy: Float,
-        totalEnergy: Float
-    ): Triple<Float, Float, Float> {
-        val normalizer = totalEnergy + 0.001f // Avoid division by zero
-        return Triple(
-            (bassEnergy / normalizer).coerceIn(0f, 1f),
-            (midEnergy / normalizer).coerceIn(0f, 1f),
-            (trebleEnergy / normalizer).coerceIn(0f, 1f)
-        )
-    }
-    
-    private fun detectBeat(currentEnergy: Float): Float {
-        val currentTime = System.currentTimeMillis()
-        
-        // Add current energy to history
-        energyHistory.add(currentEnergy)
-        if (energyHistory.size > maxHistorySize) {
-            energyHistory.removeAt(0)
-        }
-        
-        // Need sufficient history for beat detection
-        if (energyHistory.size < 6) {
-            val earlyBeat = (currentEnergy / 50000f).coerceIn(0f, 1f)
-            return earlyBeat
-        }
-        
-        // Calculate local energy average
-        val localAverage = energyHistory.takeLast(8).average().toFloat()
-        val threshold = localAverage * 1.3f
-        val timeSinceLastBeat = currentTime - lastBeatTime
-        
-        // Check beat conditions
-        val energyExceedsThreshold = currentEnergy > threshold
-        val timingOk = timeSinceLastBeat > minBeatInterval
-        val isFirstBeat = lastBeatTime == 0L
-        
-        val isBeat = energyExceedsThreshold && (timingOk || isFirstBeat)
-        
-        return if (isBeat) {
-            lastBeatTime = currentTime
-            val energyRatio = currentEnergy / (threshold + 1f)
-            val intensity = (energyRatio - 1f).coerceIn(0.1f, 1f)
-            Log.d(TAG, "BEAT DETECTED! Intensity: $intensity")
-            intensity
-        } else {
-            // Gradual decay for non-beat frames
-            val timeFactor = if (lastBeatTime == 0L) 0f else {
-                exp(-timeSinceLastBeat.toFloat() / 300f)
-            }
-            (timeFactor * 0.2f).coerceIn(0f, 0.3f)
-        }
-    }
-    
-    private fun calculateSpectralCentroid(magnitudes: FloatArray, samplingRate: Int): Float {
-        var weightedSum = 0f
-        var magnitudeSum = 0f
-        
-        for (i in magnitudes.indices) {
-            val frequency = (i * samplingRate) / (2f * magnitudes.size)
-            val magnitude = magnitudes[i]
-            weightedSum += frequency * magnitude
-            magnitudeSum += magnitude
-        }
-        
-        val centroid = if (magnitudeSum > 0) weightedSum / magnitudeSum else 0f
-        
-        // Normalize to 0-1 range (assuming max frequency of interest is ~8kHz)
-        return (centroid / 8000f).coerceIn(0f, 1f)
     }
 }

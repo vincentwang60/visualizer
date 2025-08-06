@@ -10,22 +10,19 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 private const val MAX_BUBBLES = 10
-private const val NUM_BUBBLES = 6
+private const val NUM_BUBBLES = 8
 private const val FRAME_TIME_NS = 16_000_000L // 16ms in nanoseconds
 
 data class BubbleConfig(
     val saturation: Float = 0.3f,
     val baseRadius: Float = 0.07f,
-    val radiusVariation: Float = 0.02f,
-    val baseOrbitRadius: Float = 0.05f,
+    val radiusVariation: Float = 0.03f,
+    val baseOrbitRadius: Float = 0.1f,
     val maxOrbitRadius: Float = 0.50f,
-    val orbitSpeed: Float = 0.01f,
+    val orbitSpeed: Float = 0.02f,
     val angularVelocityAmplitude: Float = 0.01f,
-    val orbitDecayRate: Float = 0.025f, // Balanced between old and new
-    val beatSmoothingRate: Float = 0.25f, // Reduced from 0.4f for less jitter
+    val orbitDecayRate: Float = 0.05f,
     val lightPosition: Pair<Float, Float> = Pair(0.2f, 0.8f),
-    val instantReactionStrength: Float = 0.05f, // Reduced from 0.3f
-    val beatThreshold: Float = 0.15f // New: higher threshold for instant reactions
 )
 
 private data class Bubble(
@@ -38,41 +35,28 @@ private data class Bubble(
     var position: Pair<Float, Float> = Pair(0f, 0f),
     var orbitRadius: Float = config.maxOrbitRadius / 4f,
     var targetOrbitRadius: Float = config.maxOrbitRadius / 4f,
-    var smoothedBeatIntensity: Float = 0f,
-    var lastBeatIntensity: Float = 0f // Track previous frame for instant reactions
 ) {    
-    fun update(time: Float, audioEvent: AudioEvent?) {
-        val angularVelocity = config.orbitSpeed + config.angularVelocityAmplitude * (sin(time + seed * 5.0f) * 0.5f + 0.5f)
-        color = getColor(time, audioEvent)
+    fun update(time: Float, audioEvent: AudioEvent?, bubbleIndex: Int) {
+        val minRadius = config.baseRadius - config.radiusVariation
+        val inverseWeight = 1.0f - 0.5f *(radius - minRadius) / (2 * config.radiusVariation) // 0.5 to 1
+        val channelIndex = (inverseWeight * 7f).toInt().coerceIn(0, 7)
+
+        val angularVelocity = inverseWeight *config.orbitSpeed + config.angularVelocityAmplitude * (sin(time + seed * 5.0f) * 0.5f + 0.5f)
         angle += if (clockwiseSpin) angularVelocity else -angularVelocity
-        radius = config.baseRadius + config.radiusVariation * sin(time + seed * 5.0f)
+        
+        color = getColor(time, audioEvent)
+        // Calculate base radius with sine variation
+        val sineVariation = config.radiusVariation * sin(time + seed * 5.0f)
+        radius = config.baseRadius + sineVariation
 
         audioEvent?.let { audio ->
-            // 1. Instant reaction only to significant beat spikes
-            val beatDelta = audio.beatIntensity - lastBeatIntensity
-            val instantReaction = if (beatDelta > config.beatThreshold) {
-                beatDelta * config.instantReactionStrength
-            } else 0f
-            
-            // 2. Moderate smoothing with clamping to prevent over-reaction
-            val targetSmoothed = smoothedBeatIntensity * (1f - config.beatSmoothingRate) + 
-                               audio.beatIntensity * config.beatSmoothingRate
-            smoothedBeatIntensity = targetSmoothed.coerceIn(0f, 1f)
-            
-            // 3. Combine with limited instant response
-            val combinedIntensity = (smoothedBeatIntensity + instantReaction).coerceIn(0f, 1f)
-            
-            val reactivity = 1f - (radius - config.baseRadius) / config.radiusVariation * 3f
-            targetOrbitRadius = config.baseOrbitRadius + combinedIntensity * reactivity * 
-                              (config.maxOrbitRadius - config.baseOrbitRadius)
-            
-            lastBeatIntensity = audio.beatIntensity
+            val fftValue = audio.fftTest?.getOrNull(channelIndex) ?: 0f
+            targetOrbitRadius = config.baseOrbitRadius + inverseWeight * fftValue * (config.maxOrbitRadius - config.baseOrbitRadius)
         }
         
-        // Moderate orbit radius interpolation
-        val lerpSpeed = config.orbitDecayRate * 1.5f // Reduced from 2.0f multiplier
-        orbitRadius = orbitRadius * (1f - lerpSpeed) + targetOrbitRadius * lerpSpeed
+        orbitRadius = orbitRadius * (1f - config.orbitDecayRate) + targetOrbitRadius * config.orbitDecayRate
         if (targetOrbitRadius <= config.baseOrbitRadius) targetOrbitRadius = config.baseOrbitRadius
+
         position = Pair(
             0.5f + orbitRadius * cos(angle),
             0.5f + orbitRadius * sin(angle)
@@ -137,7 +121,7 @@ class BubbleSystem(
 
         // Update bubbles with audio data and populate arrays
         bubbles.forEachIndexed { i, bubble ->
-            bubble.update(cachedTime, currentAudioEvent)
+            bubble.update(cachedTime, currentAudioEvent, i)
             
             System.arraycopy(bubble.color, 0, bubbleColors, i * 3, 3)
             bubbleRadii[i] = bubble.radius
@@ -164,27 +148,29 @@ class BubbleSystem(
         fun formatBubbleData(array: FloatArray, components: Int, formatter: (Int) -> String): String {
             return (0 until NUM_BUBBLES).joinToString(" ", transform = formatter)
         }
-        
+
         println("=== BubbleVisualizer Uniforms ===")
         println("Resolution: $width, $height | Time: $time | Num Bubbles: $NUM_BUBBLES")
         currentAudioEvent?.let { audio ->
-            println("Audio: Beat:${String.format("%.2f", audio.beatIntensity)} Bass:${String.format("%.2f", audio.bass)} Mid:${String.format("%.2f", audio.mid)} Treble:${String.format("%.2f", audio.treble)} Vol:${String.format("%.2f", audio.volume)}")
+            val fftStr = audio.fftTest?.joinToString(", ", prefix = "[", postfix = "]") { "%.2f".format(it) } ?: "null"
+            println(
+                "Audio: Beat:${"%.2f".format(audio.beatIntensity)} " +
+                "Vol:${"%.2f".format(audio.volume)} " +
+                "Bass:${"%.2f".format(audio.bass)} " +
+                "Mid:${"%.2f".format(audio.mid)} " +
+                "Treble:${"%.2f".format(audio.treble)}"
+            )
+            println("FFT8: $fftStr")
         }
         println("Light Position: (${String.format("%.3f", config.lightPosition.first)}, ${String.format("%.3f", config.lightPosition.second)})")
-        println("Positions: ${formatBubbleData(bubblePositions, 2) { i -> 
-            "(%.3f, %.3f)".format(bubblePositions[i * 2], bubblePositions[i * 2 + 1]) 
+        println("Positions: ${formatBubbleData(bubblePositions, 2) { i ->
+            "(%.3f, %.3f)".format(bubblePositions[i * 2], bubblePositions[i * 2 + 1])
         }}")
-        println("Colors: ${formatBubbleData(bubbleColors, 3) { i -> 
-            "(%.3f, %.3f, %.3f)".format(bubbleColors[i * 3], bubbleColors[i * 3 + 1], bubbleColors[i * 3 + 2]) 
-        }}")        
+        println("Colors: ${formatBubbleData(bubbleColors, 3) { i ->
+            "(%.3f, %.3f, %.3f)".format(bubbleColors[i * 3], bubbleColors[i * 3 + 1], bubbleColors[i * 3 + 2])
+        }}")
         println("Radii: ${bubbleRadii.joinToString(" ") { "%.3f".format(it) }}")
-        println("Seeds: ${bubbleSeeds.joinToString(" ") { "%.3f".format(it) }}")
+        println("Seeds: ${bubbleSeeds.joinToString(" ") { "%.2f".format(it) }}")
         println("================================")
-    }
-
-    fun printTemp(time: Float, width: Float, height: Float) {
-        currentAudioEvent?.let { audio ->
-            println("Audio: Beat:${String.format("%.2f", audio.beatIntensity)} Bass:${String.format("%.2f", audio.bass)} Mid:${String.format("%.2f", audio.mid)} Treble:${String.format("%.2f", audio.treble)} Vol:${String.format("%.2f", audio.volume)}")
-        }
     }
 }

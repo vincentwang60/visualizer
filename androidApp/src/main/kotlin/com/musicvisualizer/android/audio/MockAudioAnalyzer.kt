@@ -5,73 +5,85 @@ import kotlin.math.*
 import kotlin.random.Random
 
 /**
- * Mock audio analyzer that generates realistic beat intensity patterns.
- * Useful for testing and development when real audio input is not available.
+ * Mock audio analyzer generating realistic beat patterns.
+ * Useful for testing and development without real audio input.
  */
 class MockAudioAnalyzer : BaseAudioAnalyzer() {
     private val startTime = System.currentTimeMillis()
     private var thread: Thread? = null
 
-    // Beat simulation parameters
-    private val bpm = 128f // Beats per minute (typical dance music)
+    // Music simulation parameters
+    private val bpm = 128f
     private val beatsPerMeasure = 4
 
     companion object {
         private const val TAG = "MockAudioAnalyzer"
-        private const val FRAME_RATE_MS = 32L // ~30 FPS audio analysis
+        private const val FRAME_INTERVAL_MS = 32L // ~30 FPS
     }
 
     override fun start(vararg params: Any) {
-        if (running) {
-            Log.w(TAG, "Already running")
-            return
-        }
+        if (running) return
         
         running = true
         simulateAudioStream()
-        Log.d(TAG, "Started mock audio analysis")
+        Log.d(TAG, "Started")
     }
 
     override fun stop() {
         running = false
         thread?.interrupt()
         thread = null
-        Log.d(TAG, "Stopped mock audio analysis")
+        Log.d(TAG, "Stopped")
     }
 
     private fun simulateAudioStream() {
         thread = Thread {
             try {
                 while (running && !Thread.currentThread().isInterrupted) {
-                    val event = generateMockAudioEvent()
-                    notifyListeners(event)
-                    Thread.sleep(FRAME_RATE_MS)
+                    notifyListeners(generateMockAudioEvent())
+                    Thread.sleep(FRAME_INTERVAL_MS)
                 }
             } catch (e: InterruptedException) {
-                Log.d(TAG, "Mock audio thread interrupted")
+                Log.d(TAG, "Thread interrupted")
             } catch (e: Exception) {
-                Log.e(TAG, "Error in mock audio thread", e)
+                Log.e(TAG, "Error in simulation thread", e)
             }
         }.apply { start() }
     }
 
     private fun generateMockAudioEvent(): AudioEvent {
-        val currentTime = System.currentTimeMillis()
-        val elapsedSeconds = (currentTime - startTime) / 1000f
-
-        // Calculate beat position within a measure (0.0 to 4.0)
+        val elapsedSeconds = (System.currentTimeMillis() - startTime) / 1000f
         val beatPosition = (elapsedSeconds * bpm / 60f) % beatsPerMeasure
-
-        // Generate realistic beat intensity pattern
         val beatIntensity = calculateBeatIntensity(beatPosition, elapsedSeconds)
+
+        // Generate 8-band FFT data
+        val fftTest = FloatArray(8) { i ->
+            val baseLevel = when (i) {
+                0 -> 0.8f  // Sub-bass
+                1 -> 0.9f  // Bass
+                2 -> 0.7f  // Low-mid
+                3 -> 0.6f  // Mid
+                4 -> 0.5f  // Upper-mid
+                5 -> 0.4f  // Presence
+                6 -> 0.3f  // Brilliance
+                7 -> 0.2f  // Air
+                else -> 0.5f
+            }
+            generateBandEnergy(beatIntensity, baseLevel)
+        }
+
+        // Calculate bass, mid, treble from FFT data
+        val bass = (fftTest[0] + fftTest[1]) / 2f
+        val mid = (fftTest[2] + fftTest[3] + fftTest[4]) / 3f
+        val treble = (fftTest[5] + fftTest[6] + fftTest[7]) / 3f
 
         return AudioEvent(
             beatIntensity = beatIntensity,
-            bass = generateBandEnergy(beatIntensity, 0.8f),
-            mid = generateBandEnergy(beatIntensity, 0.5f),
-            treble = generateBandEnergy(beatIntensity, 0.3f),
             volume = beatIntensity * 0.8f,
-            spectralCentroid = generateSpectralCentroid(elapsedSeconds)
+            bass = bass,
+            mid = mid,
+            treble = treble,
+            fftTest = fftTest
         )
     }
 
@@ -151,10 +163,5 @@ class MockAudioAnalyzer : BaseAudioAnalyzer() {
         return (beatIntensity * baseLevel + variation).coerceIn(0f, 1f)
     }
 
-    private fun generateSpectralCentroid(elapsedSeconds: Float): Float {
-        // Simulate spectral centroid changing over time with some randomness
-        val cyclicComponent = 0.5f + 0.3f * sin(elapsedSeconds * 0.1f)
-        val randomComponent = Random.nextFloat() * 0.2f - 0.1f
-        return (cyclicComponent + randomComponent).coerceIn(0f, 1f)
-    }
+
 }

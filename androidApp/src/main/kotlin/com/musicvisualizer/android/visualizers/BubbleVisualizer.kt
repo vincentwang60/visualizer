@@ -86,10 +86,6 @@ class BubbleRenderer(
             bubbleSystem.printDebugInfo(currentTime, width.toFloat(), height.toFloat())
             lastPrintTime = now
         }
-        if (now - lastPrintTime > 30_000_000L) {
-            bubbleSystem.printTemp(currentTime, width.toFloat(), height.toFloat())
-            lastPrintTime = now
-        }
     }
 
     fun cleanup() {

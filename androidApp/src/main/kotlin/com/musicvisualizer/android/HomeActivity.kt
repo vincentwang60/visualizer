@@ -69,8 +69,7 @@ class Home : Activity() {
         setContentView(glView)
         hideSystemUI()
         
-        // Start playing the MP3
-        startAudioPlayback()
+        audioAnalyzer.start(0)
         
         gestureDetector = GestureDetector(this, VisualizerCarouselGestureListener(
             onSwipeLeft = { showNextVisualizer() },
@@ -80,17 +79,6 @@ class Home : Activity() {
         glView.setOnTouchListener { _, event ->
             gestureDetector.onTouchEvent(event)
             true
-        }
-    }
-
-    private fun startAudioPlayback() {
-        mediaPlayer = MediaPlayer.create(this, R.raw.raven)
-        mediaPlayer?.let { player ->
-            player.isLooping = true
-            player.setOnPreparedListener {
-                player.start()
-                audioAnalyzer.start(player.audioSessionId)
-            }
         }
     }
 

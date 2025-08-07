@@ -33,27 +33,29 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     
     // Recalibrated thresholds based on your log data analysis
     // These values are tuned for jazz/acoustic music with proper silence detection
+    // Based on Oncle Jazz logs showing values like: [4963, 19266, 26692, 2943, 422, 129, 174, 208]
     private val absoluteThresholds = floatArrayOf(
-        35000f,  // Sub-bass: Higher threshold to prevent noise floor issues
-        45000f,  // Bass: Higher to handle bass-heavy jazz sections
-        35000f,  // Low-mid: Moderate threshold for warmth frequencies
-        15000f,  // Mid: Lower threshold for main musical content
-        8000f,   // Upper-mid: Lower for vocal/instrument presence
-        3000f,   // High-mid: Much lower for delicate highs
-        2000f,   // Presence: Very low for air frequencies
-        1500f    // Brilliance: Lowest for ultra-highs
+        15000f,  // Sub-bass: Lower than bass to prevent constant maxing
+        25000f,  // Bass: Based on ~20-40k peaks in logs
+        20000f,  // Low-mid: Based on ~20-30k peaks
+        8000f,   // Mid: Lower threshold for main content
+        5000f,   // Upper-mid: Much lower based on logs
+        1000f,   // High-mid: Very low based on logs showing ~100-200
+        800f,    // Presence: Very low for air
+        600f     // Brilliance: Lowest for ultra-highs
     )
     
     // Noise floor thresholds for silence detection
+    // Based on quiet sections showing values like [276, 2007, ...] 
     private val noiseFloorThresholds = floatArrayOf(
-        500f,    // Sub-bass noise floor
-        1000f,   // Bass noise floor
-        800f,    // Low-mid noise floor
-        400f,    // Mid noise floor
-        200f,    // Upper-mid noise floor
-        100f,    // High-mid noise floor
-        80f,     // Presence noise floor
-        60f      // Brilliance noise floor
+        200f,    // Sub-bass noise floor
+        500f,    // Bass noise floor  
+        400f,    // Low-mid noise floor
+        200f,    // Mid noise floor
+        100f,    // Upper-mid noise floor
+        50f,     // High-mid noise floor
+        40f,     // Presence noise floor
+        30f      // Brilliance noise floor
     )
     
     // Peak tracking for dynamic scaling
@@ -161,20 +163,21 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     }
     
     private fun detectSilence(rawBands: FloatArray): Boolean {
-        // Check if all bands are below noise floor
-        var belowNoiseFloor = true
+        // Count how many bands are above their noise floor
+        var activeBands = 0
+        var totalEnergyAboveFloor = 0f
+        
         for (i in 0..7) {
             if (rawBands[i] > noiseFloorThresholds[i]) {
-                belowNoiseFloor = false
-                break
+                activeBands++
+                totalEnergyAboveFloor += rawBands[i] - noiseFloorThresholds[i]
             }
         }
         
-        // Also check average energy
-        val avgEnergy = rawBands.average()
-        val isLowEnergy = avgEnergy < 1000f  // Threshold for overall low energy
-        
-        val isSilent = belowNoiseFloor || isLowEnergy
+        // Consider it silent if:
+        // 1. Less than 3 bands are active, OR
+        // 2. Total energy above floor is very low
+        val isSilent = activeBands < 3 || totalEnergyAboveFloor < 500f
         
         if (isSilent) {
             silenceFrameCount++
@@ -274,6 +277,6 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
                 energy += magnitudes[i] * magnitudes[i]
             }
         }
-        return sqrt(energy)  // Return RMS instead of raw energy
+        return energy  // Return raw energy, not RMS - RMS was reducing values too much
     }
 }

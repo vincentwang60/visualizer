@@ -74,10 +74,17 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     private val minOutputLevel = 0.02f  // Minimum visible level
     private val dynamicRangeExpansion = 1.2f  // Expansion factor for better contrast
 
-    // Silence detection
+    // Volume detection from waveform
+    private var currentWaveformVolume = 0f
+    private var waveformVolumeHistory = mutableListOf<Float>()
+    private val maxVolumeHistorySamples = 50
+    
+    // Improved silence detection
     private var silenceFrameCount = 0
-    private val silenceThreshold = 0.01f  // Average band level below this = silence
+    private val silenceThreshold = 0.02f  // Volume below this = silence
     private val silenceFramesBeforeReset = 10  // Frames of silence before resetting
+    private var fadeOutDetected = false
+    private val fadeOutThreshold = 0.1f  // Volume threshold for fade detection
 
     private var lastPrintTime: Long? = null
     
@@ -96,11 +103,13 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
         visualizer = Visualizer(audioSessionId).apply {
             captureSize = this@RealTimeAudioAnalyzer.captureSize
             setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
-                override fun onWaveFormDataCapture(visualizer: Visualizer?, waveform: ByteArray?, samplingRate: Int) {}
+                override fun onWaveFormDataCapture(visualizer: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
+                    waveform?.let { analyzeWaveform(it) }
+                }
                 override fun onFftDataCapture(visualizer: Visualizer?, fft: ByteArray?, samplingRate: Int) {
                     fft?.let { analyze8BandFFT(it, samplingRate) }
                 }
-            }, Visualizer.getMaxCaptureRate(), false, true)
+            }, Visualizer.getMaxCaptureRate(), true, true)  // Enable both waveform and FFT
             enabled = true
         }
 
@@ -122,7 +131,41 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
         recentPeaks.forEach { it.clear() }
         adaptiveScales.fill(1.0f)
         silenceFrameCount = 0
+        currentWaveformVolume = 0f
+        waveformVolumeHistory.clear()
+        fadeOutDetected = false
         lastPrintTime = null
+    }
+    
+    private fun analyzeWaveform(waveform: ByteArray) {
+        if (!running) return
+        
+        // Calculate RMS volume from waveform
+        var sum = 0.0
+        for (byte in waveform) {
+            // Convert from signed byte to normalized float (-1 to 1)
+            val sample = byte / 128.0
+            sum += sample * sample
+        }
+        val rms = sqrt(sum / waveform.size).toFloat()
+        
+        // Update volume history
+        currentWaveformVolume = rms
+        waveformVolumeHistory.add(rms)
+        if (waveformVolumeHistory.size > maxVolumeHistorySamples) {
+            waveformVolumeHistory.removeAt(0)
+        }
+        
+        // Detect fade-out
+        if (waveformVolumeHistory.size >= 10) {
+            val recentAvg = waveformVolumeHistory.takeLast(10).average().toFloat()
+            val olderAvg = waveformVolumeHistory.take(10).average().toFloat()
+            
+            // If recent volume is much lower than older volume, we're fading out
+            if (recentAvg < fadeOutThreshold && olderAvg > fadeOutThreshold * 2) {
+                fadeOutDetected = true
+            }
+        }
     }
 
     private fun analyze8BandFFT(fft: ByteArray, samplingRate: Int) {
@@ -131,18 +174,33 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
         val magnitudes = convertFftToMagnitudes(fft)
         val rawBands = FloatArray(8) { i -> calculateBandEnergy(magnitudes, bandRanges[i]) }
         
-        // Check for silence first
-        val isSilent = detectSilence(rawBands)
+        // Enhanced silence detection using waveform volume
+        val isSilent = detectSilenceWithVolume(rawBands)
         
-        if (isSilent) {
-            // Decay values smoothly during silence
+        if (isSilent || fadeOutDetected) {
+            // Rapid decay during silence or fade-out
             for (i in 0..7) {
-                smoothedBands[i] *= 0.85f  // Faster decay during silence
-                processedBands[i] = smoothedBands[i]
+                smoothedBands[i] *= if (fadeOutDetected) 0.7f else 0.85f
+                processedBands[i] = if (smoothedBands[i] < minOutputLevel) 0f else smoothedBands[i]
+            }
+            
+            // If we've been silent for a while, ensure everything goes to zero
+            if (silenceFrameCount > 20) {
+                processedBands.fill(0f)
+                smoothedBands.fill(0f)
             }
         } else {
             // Normal processing with improved normalization
             normalizeWithAdaptiveScaling(rawBands)
+        }
+
+        // Apply volume-based scaling
+        if (currentWaveformVolume < fadeOutThreshold) {
+            // Scale down all bands based on actual volume
+            val volumeScale = (currentWaveformVolume / fadeOutThreshold).coerceIn(0f, 1f)
+            for (i in 0..7) {
+                processedBands[i] *= volumeScale
+            }
         }
 
         // Debug logging
@@ -153,8 +211,14 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             val processedArrayString = processedBands.joinToString(", ") { "%.3f".format(it) }
             Log.d(TAG, "RawBands: [$rawArrayString]")
             Log.d(TAG, "8-Band: [$processedArrayString]")
+            if (currentWaveformVolume < 0.1f) {
+                Log.d(TAG, "WaveformVolume: %.4f (LOW)".format(currentWaveformVolume))
+            }
             if (isSilent) {
                 Log.d(TAG, "Status: SILENT (frame $silenceFrameCount)")
+            }
+            if (fadeOutDetected) {
+                Log.d(TAG, "Status: FADE-OUT DETECTED")
             }
         }
         
@@ -162,12 +226,18 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
         
         notifyListeners(AudioEvent(
             fftTest = processedBands.copyOf(), 
-            volume = volume,
+            volume = currentWaveformVolume,  // Use actual waveform volume
         ))
     }
     
-    private fun detectSilence(rawBands: FloatArray): Boolean {
-        // Count how many bands are above their noise floor
+    private fun detectSilenceWithVolume(rawBands: FloatArray): Boolean {
+        // First check waveform volume
+        if (currentWaveformVolume < silenceThreshold) {
+            silenceFrameCount++
+            return true
+        }
+        
+        // Then check FFT-based detection
         var activeBands = 0
         var totalEnergyAboveFloor = 0f
         
@@ -179,9 +249,12 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
         }
         
         // Consider it silent if:
-        // 1. Less than 3 bands are active, OR
-        // 2. Total energy above floor is very low
-        val isSilent = activeBands < 3 || totalEnergyAboveFloor < 500f
+        // 1. Waveform volume is very low, OR
+        // 2. Less than 3 bands are active, OR
+        // 3. Total energy above floor is very low
+        val isSilent = currentWaveformVolume < 0.05f || 
+                      activeBands < 3 || 
+                      totalEnergyAboveFloor < 500f
         
         if (isSilent) {
             silenceFrameCount++
@@ -191,6 +264,7 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             }
         } else {
             silenceFrameCount = 0
+            fadeOutDetected = false  // Reset fade-out detection when sound returns
         }
         
         return isSilent

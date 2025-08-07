@@ -4,52 +4,57 @@ import android.media.audiofx.Visualizer
 import android.util.Log
 import kotlin.math.*
 
-/**
- * Configuration for frequency band analysis
- */
 class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     private var visualizer: Visualizer? = null
     private val captureSize = 1024
 
-    // 8-band frequency ranges
+    // Psychoacoustically-optimized frequency ranges for better musical instrument separation
+    // Based on 44.1kHz sampling rate, 1024 capture size (43.066 Hz per bin)
     private val bandRanges = arrayOf(
-        1..4,      // ~20-86 Hz (Sub-bass)
-        5..8,      // ~86-172 Hz (Bass)
-        9..16,     // ~172-344 Hz (Low-mid)
-        17..32,    // ~344-688 Hz (Mid)
-        33..64,    // ~688-1376 Hz (Upper-mid)
-        65..128,   // ~1376-2752 Hz (Presence)
-        129..256,  // ~2752-5504 Hz (Brilliance)
-        257..512   // ~5504-11008 Hz (Air)
+        1..3,      // ~43-129 Hz (Sub-bass) - Same coverage
+        4..8,      // ~172-344 Hz (Bass) - More bins (was 4..6)
+        9..15,     // ~388-646 Hz (Low-mid) - More bins (was 8..12)
+        16..25,    // ~689-1076 Hz (Mid) - More bins (was 15..22)
+        26..40,    // ~1120-1723 Hz (Upper-mid) - More bins (was 26..38)
+        41..60,    // ~1766-2584 Hz (High-mid) - More bins (was 42..62)
+        61..90,    // ~2627-3875 Hz (Presence) - Less bins (was 70..100)
+        91..140    // ~3918-6026 Hz (Brilliance) - Much less bins (was 110..160)
     )
 
-    // Strategy-specific state variables
     private val processedBands = FloatArray(8)
-    
-    private val recentHistory = Array(8) { mutableListOf<Float>() }
-    private val maxRecentSamples = 50  // ~5 seconds at 10fps
-
+    private val absoluteThresholds = floatArrayOf(
+        8000f,   // Band 1: Sub-bass - KEEP AS IS (working perfectly)
+        12000f,  // Band 2: Bass - Lower (was 15000f) for better response
+        3200f,   // Band 3: Low-mid - Lower (was 4000f) for better response  
+        1000f,   // Band 4: Mid - Lower (was 1200f) for better response
+        600f,    // Band 5: Upper-mid - Lower (was 800f) for better response
+        300f,    // Band 6: High-mid - Lower (was 400f) for better response
+        200f,    // Band 7: Presence - Keep as is
+        350f     // Band 8: Brilliance - Keep as is
+    )
+    private val smoothedBands = FloatArray(8)
+    private val smoothingFactor = 0.15f
     private var lastPrintTime: Long? = null
-    
+
     companion object {
         private const val TAG = "RealTimeAudioAnalyzer"
     }
 
     override fun start(vararg params: Any) {
         if (running) return
-        val audioSessionId = params[0] as Int
+        val audioSessionId = if (params.isNotEmpty()) params[0] as Int else 0
 
         visualizer = Visualizer(audioSessionId).apply {
             captureSize = this@RealTimeAudioAnalyzer.captureSize
+            scalingMode = Visualizer.SCALING_MODE_NORMALIZED
             setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
                 override fun onWaveFormDataCapture(visualizer: Visualizer?, waveform: ByteArray?, samplingRate: Int) {}
                 override fun onFftDataCapture(visualizer: Visualizer?, fft: ByteArray?, samplingRate: Int) {
-                    fft?.let { analyze8BandFFT(it, samplingRate) }
+                    fft?.let { analyze8BandFFT(it) }
                 }
             }, Visualizer.getMaxCaptureRate(), false, true)
             enabled = true
         }
-
         running = true
     }
 
@@ -58,78 +63,62 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
         visualizer?.apply { enabled = false; release() }
         visualizer = null
         resetState()
-        Log.d(TAG, "Stopped")
     }
 
     private fun resetState() {
         processedBands.fill(0f)
-        recentHistory.forEach { it.clear() }
+        smoothedBands.fill(0f)
         lastPrintTime = null
     }
 
-    private fun analyze8BandFFT(fft: ByteArray, samplingRate: Int) {
+    private fun analyze8BandFFT(fft: ByteArray) {
         if (!running) return
 
         val magnitudes = convertFftToMagnitudes(fft)
         val rawBands = FloatArray(8) { i -> calculateBandEnergy(magnitudes, bandRanges[i]) }
-        normalizeWithPercentile(rawBands)
+        normalizeWithAbsoluteReference(rawBands)
 
-        // Only print debug output if at least 500ms have passed since last print
+        // Debug logging every 2 seconds
         val now = System.currentTimeMillis()
-        if (lastPrintTime == null || now - lastPrintTime!! > 500) {
+        if (lastPrintTime == null || now - lastPrintTime!! > 2000) {
             lastPrintTime = now
-            val arrayString = processedBands.joinToString(", ") { "%.3f".format(it) }
-            Log.d(TAG, "8-Band: [$arrayString]")
+            val rawArrayString = rawBands.joinToString(", ") { "%.3f".format(it) }
+            val processedArrayString = processedBands.joinToString(", ") { "%.3f".format(it) }
+            Log.d(TAG, "RawBands: [$rawArrayString]")
+            Log.d(TAG, "8-Band: [$processedArrayString]")
         }
-        if (lastPrintTime == null || now - lastPrintTime!! > 500) {
-            lastPrintTime = now
-            val arrayString = processedBands.joinToString(", ") { "%.3f".format(it) }
-            Log.d(TAG, "8-Band: [$arrayString]")
-        }
-        
-        val volume = processedBands.average().toFloat()
-        
+
         notifyListeners(AudioEvent(
-            fftTest = processedBands.copyOf(), 
-            volume = volume,
+            fftTest = processedBands.copyOf(),
+            volume = processedBands.average().toFloat()
         ))
     }
 
-    private fun normalizeWithPercentile(rawBands: FloatArray) {
+    private fun normalizeWithAbsoluteReference(rawBands: FloatArray) {
         for (i in 0..7) {
-            // Maintain recent history
-            recentHistory[i].add(rawBands[i])
-            if (recentHistory[i].size > maxRecentSamples) {
-                recentHistory[i].removeAt(0)
-            }
-            
-            // Handle silence case first
             if (rawBands[i] <= 0f) {
                 processedBands[i] = 0f
+                smoothedBands[i] = smoothedBands[i] * 0.9f
                 continue
             }
-            
-            // Use 95th percentile as reference instead of max
-            val referenceValue = if (recentHistory[i].size >= 10) {
-                val sorted = recentHistory[i].sorted()
-                val percentileIndex = (sorted.size * 0.95f).toInt().coerceIn(0, sorted.size - 1)
-                val percentileValue = sorted[percentileIndex]
-                // Ensure reference value is not zero to avoid division by zero
-                if (percentileValue > 0f) percentileValue else 1f
-            } else {
-                rawBands[i].coerceAtLeast(1f)
+
+            val ratio = rawBands[i] / absoluteThresholds[i]
+
+            // Apply power curve for better dynamics (especially useful for high-frequency bands)
+            val poweredRatio = when (i) {
+                6, 7 -> ratio.pow(0.7f)  // Compress bands 7-8 more gently
+                else -> ratio
             }
-            
-            // Normalize with slight compression
-            val ratio = rawBands[i] / referenceValue
-            processedBands[i] = (ratio.pow(0.7f)).coerceIn(0f, 1f)
+
+            val normalizedValue = poweredRatio.coerceIn(0f, 1f)
+            smoothedBands[i] = smoothedBands[i] * (1f - smoothingFactor) + normalizedValue * smoothingFactor
+            processedBands[i] = smoothedBands[i]
         }
     }
 
     private fun convertFftToMagnitudes(fft: ByteArray): FloatArray {
         val fftSize = fft.size / 2
         val magnitudes = FloatArray(fftSize)
-
         for (i in 0 until fftSize) {
             val real = fft[i * 2].toFloat()
             val imag = fft[i * 2 + 1].toFloat()
@@ -140,11 +129,13 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
 
     private fun calculateBandEnergy(magnitudes: FloatArray, range: IntRange): Float {
         var energy = 0f
+        var count = 0
         for (i in range) {
             if (i < magnitudes.size) {
                 energy += magnitudes[i] * magnitudes[i]
+                count++
             }
         }
-        return energy
+        return if (count > 0) energy / count else 0f
     }
 }

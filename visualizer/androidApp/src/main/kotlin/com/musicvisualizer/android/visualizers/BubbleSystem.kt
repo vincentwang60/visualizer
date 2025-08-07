@@ -57,18 +57,33 @@ private data class Bubble(
         audioEvent?.let { audio ->
             val fftValue = audio.fftTest?.getOrNull(channelIndex) ?: 0f
             
-            // Apply exponential curve to make bubbles stickier to center
-            // Only significant FFT values (>0.6) will push bubbles far out
-            val stickyThreshold = 0.4f
-            val exponentialFactor = 2.5f
+            // Improved response curve for better dynamics like Monstercat
+            // Lower threshold for more responsiveness, but with smart scaling
+            val lowThreshold = 0.15f   // Start responding earlier
+            val midThreshold = 0.4f    // Mid-level response
+            val highThreshold = 0.7f   // High-energy response
             
-            val adjustedFftValue = if (fftValue > stickyThreshold) {
-                // Above threshold: exponential expansion
-                val normalizedValue = (fftValue - stickyThreshold) / (1f - stickyThreshold)
-                stickyThreshold + normalizedValue.pow(exponentialFactor) * (1f - stickyThreshold)
-            } else {
-                // Below threshold: compress to stay near center
-                fftValue * 0.5f
+            val adjustedFftValue = when {
+                fftValue < lowThreshold -> {
+                    // Very quiet: minimal movement, stay near center
+                    fftValue * 0.3f
+                }
+                fftValue < midThreshold -> {
+                    // Low-mid: linear response with slight boost
+                    lowThreshold * 0.3f + (fftValue - lowThreshold) * 0.8f
+                }
+                fftValue < highThreshold -> {
+                    // Mid-high: enhanced response for good dynamics
+                    val baseResponse = lowThreshold * 0.3f + (midThreshold - lowThreshold) * 0.8f
+                    val normalizedValue = (fftValue - midThreshold) / (highThreshold - midThreshold)
+                    baseResponse + normalizedValue * 0.4f
+                }
+                else -> {
+                    // Peak energy: exponential expansion for dramatic effect
+                    val baseResponse = lowThreshold * 0.3f + (midThreshold - lowThreshold) * 0.8f + 0.4f
+                    val normalizedValue = (fftValue - highThreshold) / (1f - highThreshold)
+                    baseResponse + normalizedValue.pow(1.2f) * (1f - baseResponse)
+                }
             }
             
             targetOrbitRadius = config.baseOrbitRadius + adjustedFftValue * (config.maxOrbitRadius - config.baseOrbitRadius)

@@ -35,41 +35,45 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     // These values are tuned for jazz/acoustic music with proper silence detection
     // Based on Oncle Jazz logs showing values like: [4963, 19266, 26692, 2943, 422, 129, 174, 208]
     private val absoluteThresholds = floatArrayOf(
-        15000f,  // Sub-bass: Lower than bass to prevent constant maxing
-        25000f,  // Bass: Based on ~20-40k peaks in logs
-        20000f,  // Low-mid: Based on ~20-30k peaks
-        8000f,   // Mid: Lower threshold for main content
-        5000f,   // Upper-mid: Much lower based on logs
-        1000f,   // High-mid: Very low based on logs showing ~100-200
-        800f,    // Presence: Very low for air
-        600f     // Brilliance: Lowest for ultra-highs
+        20000f,  // Sub-bass: Higher to prevent maxing
+        35000f,  // Bass: Much higher - was hitting ceiling at 25000
+        30000f,  // Low-mid: Higher for better range
+        10000f,  // Mid: Slightly higher
+        6000f,   // Upper-mid: Slightly higher
+        1500f,   // High-mid: Higher for better range
+        1200f,   // Presence: Higher to prevent clamping
+        1000f    // Brilliance: Higher to prevent clamping
     )
     
     // Noise floor thresholds for silence detection
     // Based on quiet sections showing values like [276, 2007, ...] 
     private val noiseFloorThresholds = floatArrayOf(
-        200f,    // Sub-bass noise floor
-        500f,    // Bass noise floor  
-        400f,    // Low-mid noise floor
-        200f,    // Mid noise floor
-        100f,    // Upper-mid noise floor
-        50f,     // High-mid noise floor
-        40f,     // Presence noise floor
-        30f      // Brilliance noise floor
+        150f,    // Sub-bass noise floor
+        400f,    // Bass noise floor  
+        300f,    // Low-mid noise floor
+        150f,    // Mid noise floor
+        80f,     // Upper-mid noise floor
+        40f,     // High-mid noise floor
+        30f,     // Presence noise floor
+        25f      // Brilliance noise floor
     )
-    
+
     // Peak tracking for dynamic scaling
     private val recentPeaks = Array(8) { mutableListOf<Float>() }
     private val maxPeakSamples = 200  // ~20 seconds of peak history
     
     // Temporal smoothing for reducing jitter
     private val smoothedBands = FloatArray(8)
-    private val smoothingFactor = 0.2f  // Slightly higher for more responsive feel
+    private val smoothingFactor = 0.25f  // Balanced for responsiveness and smoothness
     
     // Adaptive scaling factors
     private val adaptiveScales = FloatArray(8) { 1.0f }
-    private val scaleAdaptRate = 0.02f  // How quickly scales adapt
+    private val scaleAdaptRate = 0.03f  // Slightly faster adaptation
     
+    // Dynamic range expansion
+    private val minOutputLevel = 0.02f  // Minimum visible level
+    private val dynamicRangeExpansion = 1.2f  // Expansion factor for better contrast
+
     // Silence detection
     private var silenceFrameCount = 0
     private val silenceThreshold = 0.01f  // Average band level below this = silence
@@ -213,15 +217,18 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             
             if (cleanedValue <= 0f) {
                 // Below noise floor - rapid decay
-                smoothedBands[i] *= 0.9f
-                processedBands[i] = smoothedBands[i]
+                smoothedBands[i] *= 0.85f
+                processedBands[i] = if (smoothedBands[i] < minOutputLevel) 0f else smoothedBands[i]
                 continue
             }
             
             // Calculate adaptive scale based on recent peaks
             if (recentPeaks[i].isNotEmpty()) {
                 val recentMax = recentPeaks[i].maxOrNull() ?: absoluteThresholds[i]
-                val targetScale = absoluteThresholds[i] / max(recentMax, absoluteThresholds[i] * 0.5f)
+                val recentAvg = recentPeaks[i].average().toFloat()
+                // Use a combination of max and average for better scaling
+                val effectiveMax = recentMax * 0.7f + recentAvg * 0.3f
+                val targetScale = absoluteThresholds[i] / max(effectiveMax, absoluteThresholds[i] * 0.3f)
                 adaptiveScales[i] = adaptiveScales[i] * (1f - scaleAdaptRate) + targetScale * scaleAdaptRate
             }
             
@@ -229,32 +236,78 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             val effectiveThreshold = absoluteThresholds[i] * adaptiveScales[i]
             var normalizedValue = cleanedValue / effectiveThreshold
             
-            // Apply compression curve for better dynamic range
+            // Apply improved compression curve for better dynamic range
             normalizedValue = when {
-                normalizedValue < 0.1f -> normalizedValue * 2f  // Boost very quiet signals
-                normalizedValue < 0.5f -> 0.2f + (normalizedValue - 0.1f) * 1.5f  // Gentle boost
-                normalizedValue < 1.0f -> 0.8f + (normalizedValue - 0.5f) * 0.4f  // Compress peaks
+                normalizedValue < 0.05f -> normalizedValue * 3f     // Boost very quiet signals more
+                normalizedValue < 0.2f -> 0.15f + (normalizedValue - 0.05f) * 2f  // Moderate boost
+                normalizedValue < 0.5f -> 0.45f + (normalizedValue - 0.2f) * 1.2f  // Gentle expansion
+                normalizedValue < 0.8f -> 0.81f + (normalizedValue - 0.5f) * 0.5f  // Mild compression
+                normalizedValue < 1.2f -> 0.96f + (normalizedValue - 0.8f) * 0.1f  // Strong compression
                 else -> 1.0f  // Hard limit
             }
             
             // Apply frequency-specific weighting for jazz music
             val frequencyWeight = when(i) {
-                0 -> 0.7f   // Reduce sub-bass weight
-                1 -> 0.85f  // Slightly reduce bass
-                2 -> 1.0f   // Full weight for low-mids
-                3 -> 1.1f   // Boost mids slightly
-                4 -> 1.2f   // Boost upper-mids for clarity
-                5 -> 1.0f   // Normal high-mids
-                6 -> 0.9f   // Slightly reduce presence
+                0 -> 0.8f    // Reduce sub-bass weight
+                1 -> 0.9f    // Reduce bass slightly to prevent ceiling
+                2 -> 1.0f    // Full weight for low-mids
+                3 -> 1.1f    // Boost mids slightly
+                4 -> 1.15f   // Boost upper-mids for clarity
+                5 -> 1.0f    // Normal high-mids
+                6 -> 0.85f   // Reduce presence to prevent clamping
                 else -> 0.8f // Reduce ultra-highs
             }
             
             normalizedValue *= frequencyWeight
+            
+            // Apply dynamic range expansion for better contrast
+            if (normalizedValue > 0.1f && normalizedValue < 0.9f) {
+                // Expand the middle range for better visual distinction
+                val midPoint = 0.5f
+                val distance = normalizedValue - midPoint
+                normalizedValue = midPoint + distance * dynamicRangeExpansion
+            }
+            
             normalizedValue = normalizedValue.coerceIn(0f, 1f)
             
-            // Apply temporal smoothing
-            smoothedBands[i] = smoothedBands[i] * (1f - smoothingFactor) + normalizedValue * smoothingFactor
+            // Apply temporal smoothing with adaptive rate
+            // Less smoothing for rapid changes, more for gradual ones
+            val changeDelta = abs(normalizedValue - smoothedBands[i])
+            val adaptiveSmoothingFactor = if (changeDelta > 0.3f) {
+                smoothingFactor * 1.5f  // Faster response to big changes
+            } else {
+                smoothingFactor
+            }
+            
+            smoothedBands[i] = smoothedBands[i] * (1f - adaptiveSmoothingFactor) + normalizedValue * adaptiveSmoothingFactor
             processedBands[i] = smoothedBands[i]
+        }
+        
+        // Post-processing: Prevent bands from getting stuck at similar values
+        preventBandClamping()
+    }
+    
+    private fun preventBandClamping() {
+        // Check if multiple bands are stuck at similar high values
+        val highBands = processedBands.count { it > 0.85f }
+        if (highBands >= 3) {
+            // Apply slight variation to prevent visual monotony
+            for (i in 0..7) {
+                if (processedBands[i] > 0.85f) {
+                    // Add slight variation based on band index
+                    val variation = (i * 0.02f) - 0.08f
+                    processedBands[i] = (processedBands[i] + variation).coerceIn(0.7f, 1f)
+                }
+            }
+        }
+        
+        // Ensure high-frequency bands don't get stuck
+        for (i in 5..7) {
+            if (processedBands[i] > 0.88f && processedBands[i] < 0.92f) {
+                // Add some variation to prevent clamping around 0.9
+                val variation = sin(System.currentTimeMillis() * 0.001f + i) * 0.05f
+                processedBands[i] = (processedBands[i] + variation).coerceIn(0f, 1f)
+            }
         }
     }
 

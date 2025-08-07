@@ -5,124 +5,268 @@ import android.util.Log
 import kotlin.math.*
 
 /**
- * Real-time audio analyzer using Android's Visualizer API.
- * Captures audio output from MediaPlayer without requiring microphone permissions.
+ * Configuration for frequency band analysis
  */
 class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     private var visualizer: Visualizer? = null
-
-    // Audio capture parameters
     private val captureSize = 1024
     
-    // Beat detection state
-    private val energyHistory = mutableListOf<Float>()
-    private val maxHistorySize = 12 // ~400ms at 30fps
-    private var lastBeatTime = 0L
-    private val minBeatInterval = 300L // Minimum 300ms between beats
-    
-    // Frequency band ranges (for 1024 FFT at ~44kHz sample rate)
-    private val bassRange = 1..8        // ~20-250 Hz
-    private val midRange = 9..64        // ~250-4000 Hz  
-    private val trebleRange = 65..200   // ~4000+ Hz
+    // Improved frequency band ranges for better musical representation
+    // Based on FFT bin calculation: bin_freq = (bin_index * sample_rate) / fft_size
+    // Assuming 44.1kHz sample rate and 1024 FFT size, each bin ≈ 43Hz
+    private val bandRanges = arrayOf(
+        1..2,      // ~43-86 Hz (Sub-bass) - reduced range for cleaner sub
+        3..6,      // ~86-258 Hz (Bass) - focused bass fundamentals
+        7..14,     // ~258-602 Hz (Low-mid) - warmth and body
+        15..30,    // ~602-1290 Hz (Mid) - main musical content
+        31..62,    // ~1290-2666 Hz (Upper-mid) - presence and clarity
+        63..127,   // ~2666-5462 Hz (High-mid) - brilliance
+        128..255,  // ~5462-10968 Hz (Presence) - air and sparkle
+        256..400   // ~10968-17200 Hz (Brilliance) - ultra-highs
+    )
 
+    // Strategy-specific state variables
+    private val processedBands = FloatArray(8)
+    
+    private val recentHistory = Array(8) { mutableListOf<Float>() }
+    private val maxRecentSamples = 100  // ~10 seconds at 10fps for better range
+    
+    // Recalibrated thresholds based on your log data analysis
+    // These values are tuned for jazz/acoustic music with proper silence detection
+    private val absoluteThresholds = floatArrayOf(
+        35000f,  // Sub-bass: Higher threshold to prevent noise floor issues
+        45000f,  // Bass: Higher to handle bass-heavy jazz sections
+        35000f,  // Low-mid: Moderate threshold for warmth frequencies
+        15000f,  // Mid: Lower threshold for main musical content
+        8000f,   // Upper-mid: Lower for vocal/instrument presence
+        3000f,   // High-mid: Much lower for delicate highs
+        2000f,   // Presence: Very low for air frequencies
+        1500f    // Brilliance: Lowest for ultra-highs
+    )
+    
+    // Noise floor thresholds for silence detection
+    private val noiseFloorThresholds = floatArrayOf(
+        500f,    // Sub-bass noise floor
+        1000f,   // Bass noise floor
+        800f,    // Low-mid noise floor
+        400f,    // Mid noise floor
+        200f,    // Upper-mid noise floor
+        100f,    // High-mid noise floor
+        80f,     // Presence noise floor
+        60f      // Brilliance noise floor
+    )
+    
+    // Peak tracking for dynamic scaling
+    private val recentPeaks = Array(8) { mutableListOf<Float>() }
+    private val maxPeakSamples = 200  // ~20 seconds of peak history
+    
+    // Temporal smoothing for reducing jitter
+    private val smoothedBands = FloatArray(8)
+    private val smoothingFactor = 0.2f  // Slightly higher for more responsive feel
+    
+    // Adaptive scaling factors
+    private val adaptiveScales = FloatArray(8) { 1.0f }
+    private val scaleAdaptRate = 0.02f  // How quickly scales adapt
+    
+    // Silence detection
+    private var silenceFrameCount = 0
+    private val silenceThreshold = 0.01f  // Average band level below this = silence
+    private val silenceFramesBeforeReset = 10  // Frames of silence before resetting
+
+    private var lastPrintTime: Long? = null
+    
     companion object {
         private const val TAG = "RealTimeAudioAnalyzer"
     }
 
-    /**
-     * Start analyzing audio from the given MediaPlayer session
-     * @param params expects audioSessionId: Int
-     */
     override fun start(vararg params: Any) {
         if (running) return
-        
-        val audioSessionId = params[0] as Int
-        
+        val audioSessionId = if (params.isNotEmpty()) {
+            params[0] as Int
+        } else {
+            0 // Default audio session ID
+        }
+
         visualizer = Visualizer(audioSessionId).apply {
             captureSize = this@RealTimeAudioAnalyzer.captureSize
             setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
-                override fun onWaveFormDataCapture(
-                    visualizer: Visualizer?,
-                    waveform: ByteArray?,
-                    samplingRate: Int
-                ) {
-                    // Not used - we'll use FFT instead
+                override fun onWaveFormDataCapture(visualizer: Visualizer?, waveform: ByteArray?, samplingRate: Int) {}
+                override fun onFftDataCapture(visualizer: Visualizer?, fft: ByteArray?, samplingRate: Int) {
+                    fft?.let { analyze8BandFFT(it, samplingRate) }
                 }
-
-                override fun onFftDataCapture(
-                    visualizer: Visualizer?,
-                    fft: ByteArray?,
-                    samplingRate: Int
-                ) {
-                    fft?.let { analyzeFft(it, samplingRate) }
-                }
-            }, Visualizer.getMaxCaptureRate() / 2, false, true)
-            
+            }, Visualizer.getMaxCaptureRate(), false, true)
             enabled = true
         }
 
         running = true
-        Log.d(TAG, "Started real-time audio analysis")
     }
 
     override fun stop() {
         running = false
-        visualizer?.apply {
-            enabled = false
-            release()
-        }
+        visualizer?.apply { enabled = false; release() }
         visualizer = null
-        Log.d(TAG, "Stopped real-time audio analysis")
+        resetState()
+        Log.d(TAG, "Stopped")
     }
 
-    private fun analyzeFft(fft: ByteArray, samplingRate: Int) {
+    private fun resetState() {
+        processedBands.fill(0f)
+        smoothedBands.fill(0f)
+        recentHistory.forEach { it.clear() }
+        recentPeaks.forEach { it.clear() }
+        adaptiveScales.fill(1.0f)
+        silenceFrameCount = 0
+        lastPrintTime = null
+    }
+
+    private fun analyze8BandFFT(fft: ByteArray, samplingRate: Int) {
         if (!running) return
 
         val magnitudes = convertFftToMagnitudes(fft)
+        val rawBands = FloatArray(8) { i -> calculateBandEnergy(magnitudes, bandRanges[i]) }
         
-        // Calculate frequency band energies with bass weighting
-        val bassEnergy = calculateBandEnergy(magnitudes, bassRange) * 2f // Weight bass more heavily
-        val midEnergy = calculateBandEnergy(magnitudes, midRange)
-        val trebleEnergy = calculateBandEnergy(magnitudes, trebleRange)
-        val totalEnergy = bassEnergy + midEnergy + trebleEnergy
+        // Check for silence first
+        val isSilent = detectSilence(rawBands)
         
-        // Normalize band energies (0.0-1.0)
-        val (bass, mid, treble) = normalizeBandEnergies(bassEnergy, midEnergy, trebleEnergy, totalEnergy)
-        val volume = (totalEnergy / 1500f).coerceIn(0f, 1f)
-        
-        // Beat detection using bass-weighted energy for better drum detection
-        val beatEnergy = bassEnergy + midEnergy * 0.5f
-        val normalizedBeatEnergy = beatEnergy / 1000f
-        val beatIntensity = detectBeat(normalizedBeatEnergy)
-        
-        // Calculate spectral centroid (brightness)
-        val spectralCentroid = calculateSpectralCentroid(magnitudes, samplingRate)
-        
-        val audioEvent = AudioEvent(
-            beatIntensity = beatIntensity,
-            bass = bass,
-            mid = mid,
-            treble = treble,
-            volume = volume,
-            spectralCentroid = spectralCentroid
-        )
+        if (isSilent) {
+            // Decay values smoothly during silence
+            for (i in 0..7) {
+                smoothedBands[i] *= 0.85f  // Faster decay during silence
+                processedBands[i] = smoothedBands[i]
+            }
+        } else {
+            // Normal processing with improved normalization
+            normalizeWithAdaptiveScaling(rawBands)
+        }
 
-        notifyListeners(audioEvent)
+        // Debug logging
+        val now = System.currentTimeMillis()
+        if (lastPrintTime == null || now - lastPrintTime!! > 500) {
+            lastPrintTime = now
+            val rawArrayString = rawBands.joinToString(", ") { "%.3f".format(it) }
+            val processedArrayString = processedBands.joinToString(", ") { "%.3f".format(it) }
+            Log.d(TAG, "RawBands: [$rawArrayString]")
+            Log.d(TAG, "8-Band: [$processedArrayString]")
+            if (isSilent) {
+                Log.d(TAG, "Status: SILENT (frame $silenceFrameCount)")
+            }
+        }
+        
+        val volume = processedBands.average().toFloat()
+        
+        notifyListeners(AudioEvent(
+            fftTest = processedBands.copyOf(), 
+            volume = volume,
+        ))
     }
     
+    private fun detectSilence(rawBands: FloatArray): Boolean {
+        // Check if all bands are below noise floor
+        var belowNoiseFloor = true
+        for (i in 0..7) {
+            if (rawBands[i] > noiseFloorThresholds[i]) {
+                belowNoiseFloor = false
+                break
+            }
+        }
+        
+        // Also check average energy
+        val avgEnergy = rawBands.average()
+        val isLowEnergy = avgEnergy < 1000f  // Threshold for overall low energy
+        
+        val isSilent = belowNoiseFloor || isLowEnergy
+        
+        if (isSilent) {
+            silenceFrameCount++
+            if (silenceFrameCount > silenceFramesBeforeReset) {
+                // Reset adaptive scales during extended silence
+                adaptiveScales.fill(1.0f)
+            }
+        } else {
+            silenceFrameCount = 0
+        }
+        
+        return isSilent
+    }
+
+    private fun normalizeWithAdaptiveScaling(rawBands: FloatArray) {
+        for (i in 0..7) {
+            // Maintain recent history
+            recentHistory[i].add(rawBands[i])
+            if (recentHistory[i].size > maxRecentSamples) {
+                recentHistory[i].removeAt(0)
+            }
+            
+            // Track peaks for adaptive scaling
+            if (rawBands[i] > noiseFloorThresholds[i]) {
+                recentPeaks[i].add(rawBands[i])
+                if (recentPeaks[i].size > maxPeakSamples) {
+                    recentPeaks[i].removeAt(0)
+                }
+            }
+            
+            // Subtract noise floor first
+            val cleanedValue = max(0f, rawBands[i] - noiseFloorThresholds[i])
+            
+            if (cleanedValue <= 0f) {
+                // Below noise floor - rapid decay
+                smoothedBands[i] *= 0.9f
+                processedBands[i] = smoothedBands[i]
+                continue
+            }
+            
+            // Calculate adaptive scale based on recent peaks
+            if (recentPeaks[i].isNotEmpty()) {
+                val recentMax = recentPeaks[i].maxOrNull() ?: absoluteThresholds[i]
+                val targetScale = absoluteThresholds[i] / max(recentMax, absoluteThresholds[i] * 0.5f)
+                adaptiveScales[i] = adaptiveScales[i] * (1f - scaleAdaptRate) + targetScale * scaleAdaptRate
+            }
+            
+            // Apply normalization with adaptive scaling
+            val effectiveThreshold = absoluteThresholds[i] * adaptiveScales[i]
+            var normalizedValue = cleanedValue / effectiveThreshold
+            
+            // Apply compression curve for better dynamic range
+            normalizedValue = when {
+                normalizedValue < 0.1f -> normalizedValue * 2f  // Boost very quiet signals
+                normalizedValue < 0.5f -> 0.2f + (normalizedValue - 0.1f) * 1.5f  // Gentle boost
+                normalizedValue < 1.0f -> 0.8f + (normalizedValue - 0.5f) * 0.4f  // Compress peaks
+                else -> 1.0f  // Hard limit
+            }
+            
+            // Apply frequency-specific weighting for jazz music
+            val frequencyWeight = when(i) {
+                0 -> 0.7f   // Reduce sub-bass weight
+                1 -> 0.85f  // Slightly reduce bass
+                2 -> 1.0f   // Full weight for low-mids
+                3 -> 1.1f   // Boost mids slightly
+                4 -> 1.2f   // Boost upper-mids for clarity
+                5 -> 1.0f   // Normal high-mids
+                6 -> 0.9f   // Slightly reduce presence
+                else -> 0.8f // Reduce ultra-highs
+            }
+            
+            normalizedValue *= frequencyWeight
+            normalizedValue = normalizedValue.coerceIn(0f, 1f)
+            
+            // Apply temporal smoothing
+            smoothedBands[i] = smoothedBands[i] * (1f - smoothingFactor) + normalizedValue * smoothingFactor
+            processedBands[i] = smoothedBands[i]
+        }
+    }
+
     private fun convertFftToMagnitudes(fft: ByteArray): FloatArray {
         val fftSize = fft.size / 2
         val magnitudes = FloatArray(fftSize)
-        
+
         for (i in 0 until fftSize) {
             val real = fft[i * 2].toFloat()
             val imag = fft[i * 2 + 1].toFloat()
             magnitudes[i] = sqrt(real * real + imag * imag)
         }
-        
         return magnitudes
     }
-    
+
     private fun calculateBandEnergy(magnitudes: FloatArray, range: IntRange): Float {
         var energy = 0f
         for (i in range) {
@@ -130,79 +274,6 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
                 energy += magnitudes[i] * magnitudes[i]
             }
         }
-        return energy
-    }
-    
-    private fun normalizeBandEnergies(
-        bassEnergy: Float,
-        midEnergy: Float, 
-        trebleEnergy: Float,
-        totalEnergy: Float
-    ): Triple<Float, Float, Float> {
-        val normalizer = totalEnergy + 0.001f // Avoid division by zero
-        return Triple(
-            (bassEnergy / normalizer).coerceIn(0f, 1f),
-            (midEnergy / normalizer).coerceIn(0f, 1f),
-            (trebleEnergy / normalizer).coerceIn(0f, 1f)
-        )
-    }
-    
-    private fun detectBeat(currentEnergy: Float): Float {
-        val currentTime = System.currentTimeMillis()
-        
-        // Add current energy to history
-        energyHistory.add(currentEnergy)
-        if (energyHistory.size > maxHistorySize) {
-            energyHistory.removeAt(0)
-        }
-        
-        // Need sufficient history for beat detection
-        if (energyHistory.size < 6) {
-            val earlyBeat = (currentEnergy / 50000f).coerceIn(0f, 1f)
-            return earlyBeat
-        }
-        
-        // Calculate local energy average
-        val localAverage = energyHistory.takeLast(8).average().toFloat()
-        val threshold = localAverage * 1.3f
-        val timeSinceLastBeat = currentTime - lastBeatTime
-        
-        // Check beat conditions
-        val energyExceedsThreshold = currentEnergy > threshold
-        val timingOk = timeSinceLastBeat > minBeatInterval
-        val isFirstBeat = lastBeatTime == 0L
-        
-        val isBeat = energyExceedsThreshold && (timingOk || isFirstBeat)
-        
-        return if (isBeat) {
-            lastBeatTime = currentTime
-            val energyRatio = currentEnergy / (threshold + 1f)
-            val intensity = (energyRatio - 1f).coerceIn(0.1f, 1f)
-            Log.d(TAG, "BEAT DETECTED! Intensity: $intensity")
-            intensity
-        } else {
-            // Gradual decay for non-beat frames
-            val timeFactor = if (lastBeatTime == 0L) 0f else {
-                exp(-timeSinceLastBeat.toFloat() / 300f)
-            }
-            (timeFactor * 0.2f).coerceIn(0f, 0.3f)
-        }
-    }
-    
-    private fun calculateSpectralCentroid(magnitudes: FloatArray, samplingRate: Int): Float {
-        var weightedSum = 0f
-        var magnitudeSum = 0f
-        
-        for (i in magnitudes.indices) {
-            val frequency = (i * samplingRate) / (2f * magnitudes.size)
-            val magnitude = magnitudes[i]
-            weightedSum += frequency * magnitude
-            magnitudeSum += magnitude
-        }
-        
-        val centroid = if (magnitudeSum > 0) weightedSum / magnitudeSum else 0f
-        
-        // Normalize to 0-1 range (assuming max frequency of interest is ~8kHz)
-        return (centroid / 8000f).coerceIn(0f, 1f)
+        return sqrt(energy)  // Return RMS instead of raw energy
     }
 }

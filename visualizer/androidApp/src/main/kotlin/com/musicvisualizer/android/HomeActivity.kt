@@ -52,8 +52,8 @@ class Home : Activity() {
     private lateinit var audioAnalyzer: AudioAnalyzer
     
     private val visualizers: List<Visualizer> = listOf(
+        CircleColorVisualizer(),
         BubbleVisualizer(),
-        CircleColorVisualizer()
     )
     private var currentVisualizerIndex = 0
 

@@ -1,11 +1,14 @@
 package com.musicvisualizer.android.visualizers
 
 import android.graphics.Color
+import android.util.Log
 import com.musicvisualizer.android.audio.AudioEvent
 import com.musicvisualizer.android.audio.AudioEventListener
 import com.musicvisualizer.android.audio.AudioAnalyzer
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -18,7 +21,7 @@ data class BubbleConfig(
     val baseRadius: Float = 0.07f,
     val radiusVariation: Float = 0.03f,
     val baseOrbitRadius: Float = 0.1f,
-    val maxOrbitRadius: Float = 0.50f,
+    val maxOrbitRadius: Float = 0.40f,
     val orbitSpeed: Float = 0.02f,
     val angularVelocityAmplitude: Float = 0.01f,
     val orbitDecayRate: Float = 0.05f,
@@ -37,24 +40,48 @@ private data class Bubble(
     var targetOrbitRadius: Float = config.maxOrbitRadius / 4f,
 ) {    
     fun update(time: Float, audioEvent: AudioEvent?, bubbleIndex: Int) {
-        val minRadius = config.baseRadius - config.radiusVariation
-        val inverseWeight = 1.0f - 0.5f *(radius - minRadius) / (2 * config.radiusVariation) // 0.5 to 1
-        val channelIndex = (inverseWeight * 7f).toInt().coerceIn(0, 7)
-
-        val angularVelocity = inverseWeight *config.orbitSpeed + config.angularVelocityAmplitude * (sin(time + seed * 5.0f) * 0.5f + 0.5f)
-        angle += if (clockwiseSpin) angularVelocity else -angularVelocity
-        
-        color = getColor(time, audioEvent)
-        // Calculate base radius with sine variation
+        // Calculate base radius with sine variation only
         val sineVariation = config.radiusVariation * sin(time + seed * 5.0f)
         radius = config.baseRadius + sineVariation
 
+        val minRadius = config.baseRadius - config.radiusVariation
+        val inverseWeight = 1.0f - 0.5f * (radius - minRadius) / (2 * config.radiusVariation)
+        val channelIndex = (inverseWeight * 7f).toInt().coerceIn(0, 7)
+        // Log.d("BubbleSystem", "bubbleIndex=$bubbleIndex, channelIndex=$channelIndex, radius=%.4f".format(radius))
+
+        val angularVelocity = inverseWeight * config.orbitSpeed + config.angularVelocityAmplitude * (sin(time + seed * 5.0f) * 0.5f + 0.5f)
+        angle += if (clockwiseSpin) angularVelocity else -angularVelocity
+        
+        color = getColor(time, audioEvent)
+
         audioEvent?.let { audio ->
             val fftValue = audio.fftTest?.getOrNull(channelIndex) ?: 0f
-            targetOrbitRadius = config.baseOrbitRadius + inverseWeight * fftValue * (config.maxOrbitRadius - config.baseOrbitRadius)
+            
+            // Apply exponential curve to make bubbles stickier to center
+            // Only significant FFT values (>0.6) will push bubbles far out
+            val stickyThreshold = 0.4f
+            val exponentialFactor = 2.5f
+            
+            val adjustedFftValue = if (fftValue > stickyThreshold) {
+                // Above threshold: exponential expansion
+                val normalizedValue = (fftValue - stickyThreshold) / (1f - stickyThreshold)
+                stickyThreshold + normalizedValue.pow(exponentialFactor) * (1f - stickyThreshold)
+            } else {
+                // Below threshold: compress to stay near center
+                fftValue * 0.5f
+            }
+            
+            targetOrbitRadius = config.baseOrbitRadius + adjustedFftValue * (config.maxOrbitRadius - config.baseOrbitRadius)
         }
         
-        orbitRadius = orbitRadius * (1f - config.orbitDecayRate) + targetOrbitRadius * config.orbitDecayRate
+        // Increase decay rate to pull bubbles back faster
+        val adaptiveDecayRate = if (targetOrbitRadius < orbitRadius) {
+            config.orbitDecayRate * 2f // Pull back to center faster
+        } else {
+            config.orbitDecayRate // Normal expansion rate
+        }
+        
+        orbitRadius = orbitRadius * (1f - adaptiveDecayRate) + targetOrbitRadius * adaptiveDecayRate
         if (targetOrbitRadius <= config.baseOrbitRadius) targetOrbitRadius = config.baseOrbitRadius
 
         position = Pair(

@@ -5,7 +5,7 @@ import android.util.Log
 import kotlin.math.*
 
 /**
- * Audio analyzer with multiple normalization strategies for better visualization
+ * Configuration for frequency band analysis
  */
 class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     private var visualizer: Visualizer? = null

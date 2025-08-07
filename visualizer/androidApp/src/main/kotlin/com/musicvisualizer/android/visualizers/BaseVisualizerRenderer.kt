@@ -35,13 +35,7 @@ abstract class BaseVisualizerRenderer(private val context: Context) : Renderer, 
     protected abstract val fragmentShaderFile: String
 
     // Audio analyzer integration
-    private val audioAnalyzer = MockAudioAnalyzer()
     protected var latestAudioEvent: AudioEvent? = null
-
-    init {
-        audioAnalyzer.addListener(this)
-        audioAnalyzer.start()
-    }
 
     override fun onAudioEvent(event: AudioEvent) {
         latestAudioEvent = event
@@ -127,7 +121,5 @@ abstract class BaseVisualizerRenderer(private val context: Context) : Renderer, 
             GLES30.glDeleteProgram(program)
             program = 0
         }
-        audioAnalyzer.stop()
-        audioAnalyzer.removeListener(this)
     }
 }

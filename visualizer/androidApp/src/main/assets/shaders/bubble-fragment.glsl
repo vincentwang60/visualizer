@@ -1,7 +1,7 @@
 #version 310 es
 precision mediump float;
 
-#define MAX_BUBBLES 10
+#define MAX_BUBBLES 20
 #define PI 3.14159265
 #define INV_PI 0.318310
 #define INV_2PI 0.159155
@@ -79,12 +79,6 @@ void main() {
 
     float animation_time = u_time * flow_factor;
 
-    // Background gradient
-    float r_a = cos(u_time * 0.25) * 0.05 + 0.05;
-    float g_a = sin(u_time * 0.25) * 0.05 + 0.05;
-    float b_a = (sin(u_time * 0.25) + cos(u_time * 0.25)) * 0.05 + 0.05;
-    vec3 background_color = vec3(r_a, g_a, b_a);
-
     // Bubble 
     for (int i = 0; i < MAX_BUBBLES; i++) {
         if (i >= num_bubbles) break;
@@ -111,10 +105,9 @@ void main() {
         final_outline_color += outline_color * outline;
         outline_weight += outline;
 
-        vec2 color_uv = mask_uv * mask_uv;
-        vec3 interior = hsv2rgb(vec3(fract((color_uv.x + color_uv.y) * u_bubbleSeeds[i]), 1., 1.0));
-        interior = mix(target_color * 1.2, interior, 0.6);
-        interior *= smoothstep(0.90 + u_bubbleSeeds[i] * 0.05, 1.0, sin(dot(mask_uv, vec2(1.2 + u_bubbleSeeds[i] * 0.1, 1.7 - u_bubbleSeeds[i] * 0.1))));
+        vec3 interior = hsv2rgb(vec3(fract((mask_uv.x + mask_uv.y) * u_bubbleSeeds[i]), .9, .5));
+        interior = mix(target_color, interior, 0.9);
+        interior *= smoothstep(0.50 + u_bubbleSeeds[i] * 0.05, 1.0, sin(dot(mask_uv, vec2(1.2 + u_bubbleSeeds[i] * 0.5, 1.7 - u_bubbleSeeds[i] * 0.3))));
         float interior_strength = clamp(-di / (radius + 1e-6), 0.0, 1.0);
         final_color += interior * interior_strength;
     }
@@ -149,6 +142,5 @@ void main() {
         float specular = 1. + smoothstep(0.8, 1.0, max(dot(grad, light_dir), 0.0));
         color *= specular;
     }
-    color += background_color;
     fragColor = vec4(color, 1.0);
 }

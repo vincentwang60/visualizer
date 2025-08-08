@@ -2,6 +2,7 @@ package com.musicvisualizer.android.visualizers
 
 import android.opengl.GLSurfaceView.Renderer
 import android.opengl.GLES30
+import android.util.Log
 import com.musicvisualizer.android.audio.AudioAnalyzer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -12,6 +13,7 @@ class BubbleVisualizer : Visualizer {
 }
 
 private const val FRAME_TIME_NS = 16_000_000L // 16ms in nanoseconds
+private const val TAG = "MusicViz-BubbleRender"
 
 /**
  * Wrapper/connector class that handles OpenGL uniforms and boilerplate
@@ -23,7 +25,7 @@ class BubbleRenderer(
     override val vertexShaderFile = "shaders/bubble-vertex.glsl"
     override val fragmentShaderFile = "shaders/bubble-fragment.glsl"
 
-    private val bubbleSystem = BubbleSystem(audioAnalyzer = audioAnalyzer)
+    private val bubbleSystem = BubbleSystem()
     private var lastDrawTime = 0L
     private var lastPrintTime = 0L
 
@@ -36,6 +38,10 @@ class BubbleRenderer(
     private var bubblePositionsHandle = 0
     private var bubbleSeedsHandle = 0
     private var lightPositionHandle = 0
+
+    init {
+        audioAnalyzer.addListener(bubbleSystem)
+    }
 
     override fun onSurfaceCreatedExtras(gl: GL10?, config: EGLConfig?) {
         resolutionHandle = GLES30.glGetUniformLocation(program, "u_resolution")
@@ -82,17 +88,16 @@ class BubbleRenderer(
         checkGLError()
         
         // Print debug info every 30 seconds
-        if (now - lastPrintTime > 30_000_000_000L) {
-            bubbleSystem.printDebugInfo(currentTime, width.toFloat(), height.toFloat())
+        if (now - lastPrintTime > 10_000_000_000L) {
+            //bubbleSystem.printDebugInfo(currentTime, width.toFloat(), height.toFloat())
             lastPrintTime = now
         }
     }
 
-    fun cleanup() {
-        bubbleSystem.cleanup()
+    override fun release() {
+        super.release()
+        audioAnalyzer.removeListener(bubbleSystem)
     }
-
-    fun getCurrentAudioEvent() = bubbleSystem.getCurrentAudioEvent()
 
     private inline fun setUniform(handle: Int, setter: (Int) -> Unit) {
         if (handle >= 0) setter(handle)
@@ -101,7 +106,7 @@ class BubbleRenderer(
     private fun checkGLError() {
         val error = GLES30.glGetError()
         if (error != GLES30.GL_NO_ERROR) {
-            println("OpenGL error in BubbleVisualizer: $error")
+            Log.e(TAG, "OpenGL error in BubbleVisualizer: $error")
         }
     }
 } 

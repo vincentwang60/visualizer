@@ -35,7 +35,7 @@ class VisualizerGLSurfaceView(
     init {
         // Set EGL context to OpenGL ES 3.0
         setEGLContextClientVersion(3)
-        setRenderer(visualizer.createRenderer(activity, audioAnalyzer))
+        setRenderer(renderer)  // Use the passed renderer instead of creating a new one
     }
 }
 
@@ -52,8 +52,8 @@ class Home : Activity() {
     private lateinit var audioAnalyzer: AudioAnalyzer
     
     private val visualizers: List<Visualizer> = listOf(
-        CircleColorVisualizer(),
         BubbleVisualizer(),
+        CircleColorVisualizer(),
     )
     private var currentVisualizerIndex = 0
 

@@ -69,7 +69,7 @@ class BubbleRenderer(
         setUniform(resolutionHandle) { GLES30.glUniform2f(it, width.toFloat(), height.toFloat()) }
         setUniform(timeHandle) { GLES30.glUniform1f(it, currentTime) }
         setUniform(numBubblesHandle) { GLES30.glUniform1f(it, bubbleSystem.getBubbleCount().toFloat()) }
-        setUniform(lightPositionHandle) { GLES30.glUniform2f(it, config.lightPosition.first, config.lightPosition.second) }
+        setUniform(lightPositionHandle) { GLES30.glUniform2f(it, bubbleSystem.getLightPosition().first, bubbleSystem.getLightPosition().second) }
 
         // Set array uniforms using bubble system data
         setUniform(bubblePositionsHandle) { 

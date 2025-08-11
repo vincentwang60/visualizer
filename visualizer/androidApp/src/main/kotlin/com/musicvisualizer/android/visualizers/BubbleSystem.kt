@@ -7,6 +7,7 @@ import com.musicvisualizer.android.audio.AudioEventListener
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.max
 import kotlin.random.Random
 
 private const val MAX_BUBBLES = 20
@@ -16,9 +17,8 @@ private const val TAG = "MusicViz-Bubble"
 data class BubbleConfig(
     val saturation: Float = 0.7f,
     val baseRadius: Float = 0.08f,
-    val maxSpikeRadius: Float = 0.10f,
-    val minSpikeRadius: Float = 0.04f,
-    val lightPosition: Pair<Float, Float> = Pair(0.2f, 0.8f),
+    val maxSpikeRadius: Float = 0.09f,
+    val minSpikeRadius: Float = 0.03f,
 )
 
 private data class Bubble(
@@ -41,25 +41,17 @@ private data class Bubble(
 ) {    
     fun update(time: Float, lowFreqEnergy: Float = 0f, deltaTime: Float = 0.016f) {
         if (isCentral) {
-            val motionRange = 0.05f
+            val motionRange = 0.075f
             val offsetX = motionRange * sin(time * 0.25f)
             val offsetY = motionRange * cos(time * 0.25f + 1.5f)
             position = Pair(0.5f + offsetX, 0.5f + offsetY)
             radius = baseRadius + lowFreqEnergy * 0.2f
-        } else {
-            val age = (System.currentTimeMillis() - creationTime) / 1000f
-            val maxAge = BUBBLE_LIFETIME_MS / 1000f
-            val normalizedAge = age / maxAge
-            
-            // Modified orbit pattern: start at halfway inside central bubble, go out to max, then back to halfway inside
+        } else {      
+            // Orbit pattern: start at halfway inside central bubble, go out to max, then back to halfway inside
             // Using a sine wave that goes from 0.5 to maxScale and back to 0.5
-            val minRadiusScale = 0.5f // Halfway inside central bubble
-            val maxRadiusScale = maxOrbitRadius / centralBubbleRadius
-            val radiusRange = maxRadiusScale - minRadiusScale
-            
-            // Sine wave from 0 to π gives us 0 -> 1 -> 0, perfect for halfway -> max -> halfway
-            val orbitProgress = sin(normalizedAge * PI.toFloat())
-            currentRadius = centralBubbleRadius * (minRadiusScale + orbitProgress * radiusRange)
+            val age = (System.currentTimeMillis() - creationTime) / 1000f      
+            val orbitProgress = sin(age / (BUBBLE_LIFETIME_MS / 1000f) * PI.toFloat())
+            currentRadius = centralBubbleRadius * (0.5f + orbitProgress * (maxOrbitRadius / centralBubbleRadius - 0.5f))
             
             currentAngle += angularVelocity * deltaTime
             
@@ -77,23 +69,18 @@ private data class Bubble(
     
     private fun getColor(time: Float, lowFreqEnergy: Float = 0f): FloatArray {
         val hue = if (isCentral) {
-            // Central bubble: shift hue based on low frequency energy
-            // Red/orange (0-60) for high bass, blue/purple (240-300) for low bass
-            val bassHue = lowFreqEnergy * 360f // 0° to 360° (red to blue)
-            (bassHue + time * 10f) % 360f // Slow color cycling
+            (time * 30f + lowFreqEnergy * 300f) % 360f
         } else {
-            // Spike bubbles: original rainbow cycling
             (time * 30f + seed * 360f) % 360f
         }
-        
         val saturation = if (isCentral) {
             // Central bubble: higher saturation with more bass
-            (config.saturation + lowFreqEnergy * 0.3f).coerceIn(0f, 1f)
+            (config.saturation / 2.0f + lowFreqEnergy).coerceIn(0f, 1f)
         } else {
             config.saturation * fftMagnitude
         }
         
-        val hsv = floatArrayOf(hue, saturation, 0.9f)
+        val hsv = floatArrayOf(hue, saturation, 1.0f)
         val argbColor = Color.HSVToColor(hsv)
         return floatArrayOf(
             Color.red(argbColor) / 255f,
@@ -109,6 +96,7 @@ class BubbleSystem(
     private val bubbles = mutableListOf<Bubble>()
     private val startTime = System.nanoTime()
     private var currentLowFreqEnergy = 0f
+    private var currentHighFreqEnergy = 0f
     private var cachedTime = 0f
     private var lastTimeUpdate = 0L
     private var lastFrameTime = 0L
@@ -116,6 +104,7 @@ class BubbleSystem(
     private var centralBubblePosition = Pair(0.5f, 0.5f)
     private var centralBubbleRadius = config.baseRadius * 2.0f
     private var globalAngleOffset = 0f
+    private var lightAngle = 0f
 
     val bubbleColors = FloatArray(MAX_BUBBLES * 3)
     val bubbleRadii = FloatArray(MAX_BUBBLES)
@@ -125,9 +114,10 @@ class BubbleSystem(
     init {
         val centralBubble = Bubble(
             config = config,
-            baseRadius = config.baseRadius * 1.2f,
+            baseRadius = config.baseRadius * 1.5f,
             position = Pair(0.5f, 0.5f),
-            isCentral = true
+            isCentral = true,
+            seed = 0f
         )
         bubbles.add(centralBubble)
         centralBubbleRadius = centralBubble.baseRadius
@@ -135,6 +125,7 @@ class BubbleSystem(
 
     override fun onAudioEvent(event: AudioEvent) {
         currentLowFreqEnergy = event.lowFrequencyEnergy
+        currentHighFreqEnergy = event.highFrequencyEnergy
         
         for (spike in event.spikes) {
             synchronized(bubbles) {
@@ -144,8 +135,9 @@ class BubbleSystem(
                     val fftMagnitude = if (spike.bandIndex < event.fftTest.size) event.fftTest[spike.bandIndex] else 0f
                     
                     // Calculate max orbit radius from center (not from edge of central bubble)
-                    val maxOrbitRadius = centralBubbleRadius + (fftMagnitude * fftMagnitude * 0.25f)
-                    val baseAngularVel = Random.nextFloat() * 1.5f + fftMagnitude * 2.0f // Reduced speed
+                    val amplitude = (max(fftMagnitude - 0.4f, 0f) / 0.7f).let { it * it } * 0.2f
+                    val maxOrbitRadius = centralBubbleRadius + amplitude
+                    val baseAngularVel = 2.0f + amplitude * 20.0f
                     
                     // Random direction: 50/50 clockwise vs counterclockwise
                     val angularVelocity = if (Random.nextBoolean()) baseAngularVel else -baseAngularVel
@@ -211,9 +203,12 @@ class BubbleSystem(
             }
         }
 
+        lightAngle += currentHighFreqEnergy * 0.1f
+
         return cachedTime
     }
 
     fun getConfig() = config
     fun getBubbleCount() = bubbles.size
+    fun getLightPosition() = Pair(0.5f + 2.0f * cos(lightAngle), 0.5f + 2.0f * sin(lightAngle))
 }

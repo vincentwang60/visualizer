@@ -23,7 +23,8 @@ data class AudioEvent(
     val treble: Float = 0f,                // Treble frequency energy
     val fftTest: FloatArray = FloatArray(8),       // 8-band FFT test data
     val spikes: List<FrequencySpike> = emptyList(), // Detected frequency spikes
-    val lowFrequencyEnergy: Float = 0f     // Average energy of bands 0-3
+    val lowFrequencyEnergy: Float = 0f,    // Average energy of bands 0-3
+    val highFrequencyEnergy: Float = 0f    // Average energy of bands 4-7
 )
 
 /**

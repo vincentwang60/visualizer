@@ -80,12 +80,6 @@ class CircleColorVisualizer : Visualizer {
                 val activeSpikes = activeSpikeCount.mapIndexed { band, count ->
                     if (count > 0) "Band$band:$count" else null
                 }.filterNotNull()
-                
-                if (activeSpikes.isNotEmpty()) {
-                    Log.d("MusicViz-Circle", "Active spikes: ${activeSpikes.joinToString(", ")}")
-                } else {
-                    Log.d("MusicViz-Circle", "No active spikes")
-                }
                 lastLogTime = currentTime
             }
         }

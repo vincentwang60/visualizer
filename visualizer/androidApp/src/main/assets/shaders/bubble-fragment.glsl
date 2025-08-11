@@ -97,17 +97,16 @@ void main() {
         }
         vec2 globe_uv = rotateGlobe(u_bubbleSeeds[i], pos, radius);
         vec2 sphere_pos = vec2(cos(globe_uv.x * 2.0 * PI), sin(globe_uv.x * 2.0 * PI) + globe_uv.y * 2.0);
-        vec2 mask_uv = watercolor_noise(sphere_pos, animation_time, 4, u_bubbleSeeds[i]);
+        vec2 mask_uv = watercolor_noise(sphere_pos, animation_time, 5, u_bubbleSeeds[i]);
         vec3 outline_color = hsv2rgb(vec3(fract((mask_uv.x + mask_uv.y) * 0.15), .7, 1.0));
-        outline_color= mix(target_color * 1.2, outline_color, 0.6);
+        outline_color= mix(target_color * 1.2, outline_color, 0.3);
         float outline = 1.0 - di / blending_factor;
 
         final_outline_color += outline_color * outline;
         outline_weight += outline;
 
-        vec3 interior = hsv2rgb(vec3(fract((mask_uv.x + mask_uv.y) * u_bubbleSeeds[i]), .9, .5));
-        interior = mix(target_color, interior, 0.9);
-        interior *= smoothstep(0.50 + u_bubbleSeeds[i] * 0.05, 1.0, sin(dot(mask_uv, vec2(1.2 + u_bubbleSeeds[i] * 0.5, 1.7 - u_bubbleSeeds[i] * 0.3))));
+        vec3 interior = hsv2rgb(vec3(fract((mask_uv.x + mask_uv.y)), 1.0, 1.0));
+        interior *= smoothstep(0.9, 1.0, sin(dot(mask_uv, vec2(1.2 + u_bubbleSeeds[i] * 0.5, 1.7 - u_bubbleSeeds[i] * 0.3))));
         float interior_strength = clamp(-di / (radius + 1e-6), 0.0, 1.0);
         final_color += interior * interior_strength;
     }
@@ -139,8 +138,8 @@ void main() {
         }
         grad = total_influence > 0.001 ? normalize(grad / total_influence) : vec2(0.0, 1.0);
         vec2 light_dir = normalize(u_lightPosition - frag_coord / u_resolution);
-        float specular = 1. + smoothstep(0.8, 1.0, max(dot(grad, light_dir), 0.0));
-        color *= specular;
+        float specular = 1. + (smoothstep(0.0, 0.5, max(dot(grad, light_dir) - 0.5, 0.0)));
+        color *= specular * specular;
     }
     fragColor = vec4(color, 1.0);
 }

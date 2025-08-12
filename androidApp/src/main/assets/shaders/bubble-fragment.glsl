@@ -1,7 +1,7 @@
 #version 310 es
 precision mediump float;
 
-#define MAX_BUBBLES 10
+#define MAX_BUBBLES 8
 #define PI 3.14159265
 #define INV_PI 0.318310
 #define INV_2PI 0.159155
@@ -17,44 +17,47 @@ uniform vec2 u_lightPosition;
 
 out vec4 fragColor;
 
+// Optimized HSV to RGB conversion
 vec3 hsv2rgb(vec3 c) {
     vec3 p = abs(fract(c.x + vec3(1.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0) - 1.0;
-    p = c.z * mix(vec3(1.0), clamp(p, 0.0, 1.0), c.y);
-    return p;
+    return c.z * mix(vec3(1.0), clamp(p, 0.0, 1.0), c.y);
 }
 
+// Simplified smooth minimum function
 float smoothMin(float a, float b, float k) {
     float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
     return mix(b, a, h) - k * h * (1.0 - h);
 }
 
+// Optimized watercolor noise with reduced iterations
 vec2 watercolor_noise(vec2 _uv, float time, int num_iterations, float seed) {
     float safe_time = time + seed;
-    for (int i = 1; i < num_iterations; i++) {
-        float factor = 1. / float(i);
-        float freq = float(i) * 2.5;
+    // Reduced iterations for better performance
+    for (int i = 1; i < min(num_iterations, 3); i++) {
+        float factor = 1.0 / float(i);
+        float freq = float(i) * 2.0; // Reduced frequency
         float sin_val = sin(freq * _uv.y + safe_time);
         float cos_val = cos(freq * _uv.x + safe_time);
-        _uv.x += factor * sin_val + seed * 10.;
-        _uv.y += factor * cos_val + seed * 10.;
+        _uv.x += factor * sin_val + seed * 5.0; // Reduced seed influence
+        _uv.y += factor * cos_val + seed * 5.0;
     }
     return _uv;
 }
 
+// Optimized position calculation
 vec2 posFromCenter(int i, vec2 frag_coord, float aspect_offset, vec2 resolution_ratio) {
-    float radius = u_bubbleRadii[i];
     vec2 center = vec2(
         u_bubblePositions[i].x * u_resolution.y / u_resolution.x + aspect_offset,
         u_bubblePositions[i].y
     );
-    vec2 pos = (frag_coord / u_resolution - center) * resolution_ratio;
-    return pos;
+    return (frag_coord / u_resolution - center) * resolution_ratio;
 }
 
+// Simplified globe rotation
 vec2 rotateGlobe(float seed, vec2 pos, float radius) {    
     float z = sqrt(max(radius * radius - dot(pos, pos), 0.0));
     vec3 sphere_pos = vec3(pos, z) / radius;
-    vec3 rotated = vec3(sphere_pos.x + sphere_pos.z * seed, sphere_pos.y, sphere_pos.z);
+    vec3 rotated = vec3(sphere_pos.x + sphere_pos.z * seed * 0.5, sphere_pos.y, sphere_pos.z); // Reduced rotation
     
     return vec2(
         atan(rotated.x, rotated.z) * INV_2PI + 0.5,
@@ -63,10 +66,11 @@ vec2 rotateGlobe(float seed, vec2 pos, float radius) {
 }
 
 void main() {
+    // Optimized parameters
     float edge_thickness = 0.002;
-    float inner_fade_distance = 0.03;
-    float blending_factor = 0.03;
-    float flow_factor = 1.;
+    float inner_fade_distance = 0.025; // Reduced for performance
+    float blending_factor = 0.025; // Reduced for performance
+    float flow_factor = 0.8; // Reduced for performance
     
     float outline_weight = 0.0;
     vec3 final_color = vec3(0.0);
@@ -79,42 +83,50 @@ void main() {
 
     float animation_time = u_time * flow_factor;
 
-    // Background gradient
-    float r_a = cos(u_time * 0.25) * 0.05 + 0.05;
-    float g_a = sin(u_time * 0.25) * 0.05 + 0.05;
-    float b_a = (sin(u_time * 0.25) + cos(u_time * 0.25)) * 0.05 + 0.05;
+    // Simplified background gradient
+    float r_a = cos(u_time * 0.2) * 0.03 + 0.03; // Reduced amplitude
+    float g_a = sin(u_time * 0.2) * 0.03 + 0.03;
+    float b_a = (sin(u_time * 0.2) + cos(u_time * 0.2)) * 0.03 + 0.03;
     vec3 background_color = vec3(r_a, g_a, b_a);
 
-    // Bubble 
+    // Optimized bubble rendering
     for (int i = 0; i < MAX_BUBBLES; i++) {
         if (i >= num_bubbles) break;
+        
         vec3 target_color = u_bubbleColors[i];
         vec2 pos = posFromCenter(i, frag_coord, aspect_offset, resolution_ratio);
 
         float len = length(pos);
         float radius = u_bubbleRadii[i];
         float di = len - radius;
+        
         if (di > blending_factor) continue;
 
         d = smoothMin(d, di, blending_factor);
 
-        if (length(pos) > radius) {
+        if (len > radius) {
             pos = normalize(pos) * radius;
         }
+        
+        // Simplified globe UV calculation
         vec2 globe_uv = rotateGlobe(u_bubbleSeeds[i], pos, radius);
         vec2 sphere_pos = vec2(cos(globe_uv.x * 2.0 * PI), sin(globe_uv.x * 2.0 * PI) + globe_uv.y * 2.0);
-        vec2 mask_uv = watercolor_noise(sphere_pos, animation_time, 4, u_bubbleSeeds[i]);
-        vec3 outline_color = hsv2rgb(vec3(fract((mask_uv.x + mask_uv.y) * 0.15), .7, 1.0));
-        outline_color= mix(target_color * 1.2, outline_color, 0.6);
+        vec2 mask_uv = watercolor_noise(sphere_pos, animation_time, 3, u_bubbleSeeds[i]); // Reduced iterations
+        
+        // Simplified outline color calculation
+        vec3 outline_color = hsv2rgb(vec3(fract((mask_uv.x + mask_uv.y) * 0.1), 0.6, 1.0)); // Reduced complexity
+        outline_color = mix(target_color * 1.1, outline_color, 0.5); // Reduced mixing
         float outline = 1.0 - di / blending_factor;
 
         final_outline_color += outline_color * outline;
         outline_weight += outline;
 
+        // Simplified interior color calculation
         vec2 color_uv = mask_uv * mask_uv;
-        vec3 interior = hsv2rgb(vec3(fract((color_uv.x + color_uv.y) * u_bubbleSeeds[i]), 1., 1.0));
-        interior = mix(target_color * 1.2, interior, 0.6);
-        interior *= smoothstep(0.90 + u_bubbleSeeds[i] * 0.05, 1.0, sin(dot(mask_uv, vec2(1.2 + u_bubbleSeeds[i] * 0.1, 1.7 - u_bubbleSeeds[i] * 0.1))));
+        vec3 interior = hsv2rgb(vec3(fract((color_uv.x + color_uv.y) * u_bubbleSeeds[i]), 1.0, 1.0));
+        interior = mix(target_color * 1.1, interior, 0.5);
+        
+        // Simplified interior strength calculation
         float interior_strength = clamp(-di / (radius + 1e-6), 0.0, 1.0);
         final_color += interior * interior_strength;
     }
@@ -122,16 +134,17 @@ void main() {
     final_outline_color = final_outline_color / max(outline_weight, 1e-5);
     float abs_d = abs(d);
     float outline = 1.0 - smoothstep(0.0, edge_thickness, abs_d);
-    float inner_mask = .5 * smoothstep(-inner_fade_distance, 0.0, d) * step(d, 0.0);
+    float inner_mask = 0.5 * smoothstep(-inner_fade_distance, 0.0, d) * step(d, 0.0);
     vec3 color = mix(final_color, final_outline_color, outline);
     color = mix(color, final_outline_color, inner_mask);    
     
-    // Specular highlight
+    // Simplified specular highlight calculation
     if (abs_d < inner_fade_distance && d < 0.0) {
         vec2 grad = vec2(0.0);
         float total_influence = 0.0;
         
-        for (int i = 0; i < MAX_BUBBLES; i++) {
+        // Reduced specular calculation complexity
+        for (int i = 0; i < min(MAX_BUBBLES, 4); i++) { // Limit to 4 bubbles for specular
             if (i >= num_bubbles) break;
             
             vec2 pos = posFromCenter(i, frag_coord, aspect_offset, resolution_ratio);
@@ -144,11 +157,15 @@ void main() {
             grad += (pos / max(len, 0.001)) * influence;
             total_influence += influence;
         }
-        grad = total_influence > 0.001 ? normalize(grad / total_influence) : vec2(0.0, 1.0);
-        vec2 light_dir = normalize(u_lightPosition - frag_coord / u_resolution);
-        float specular = 1. + smoothstep(0.8, 1.0, max(dot(grad, light_dir), 0.0));
-        color *= specular;
+        
+        if (total_influence > 0.001) {
+            grad = normalize(grad / total_influence);
+            vec2 light_dir = normalize(u_lightPosition - frag_coord / u_resolution);
+            float specular = 1.0 + smoothstep(0.7, 1.0, max(dot(grad, light_dir), 0.0)); // Simplified specular
+            color *= specular;
+        }
     }
+    
     color += background_color;
     fragColor = vec4(color, 1.0);
 }

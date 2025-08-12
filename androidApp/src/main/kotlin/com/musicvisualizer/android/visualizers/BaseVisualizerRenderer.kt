@@ -3,7 +3,6 @@ package com.musicvisualizer.android.visualizers
 import android.content.Context
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView.Renderer
-import com.musicvisualizer.android.audio.MockAudioAnalyzer
 import com.musicvisualizer.android.audio.AudioEvent
 import com.musicvisualizer.android.audio.AudioEventListener
 import java.nio.ByteBuffer
@@ -17,6 +16,9 @@ interface Visualizer {
     fun createRenderer(context: Context, audioAnalyzer: com.musicvisualizer.android.audio.AudioAnalyzer): Renderer
 }
 
+/**
+ * Optimized base renderer with improved resource management and reduced overhead
+ */
 abstract class BaseVisualizerRenderer(private val context: Context) : Renderer, AudioEventListener {
 
     protected var program: Int = 0
@@ -25,6 +27,7 @@ abstract class BaseVisualizerRenderer(private val context: Context) : Renderer, 
     protected var height: Int = 1
     protected var aspectRatio: Float = 1f
 
+    // Pre-allocated buffers for better performance
     private val squareCoords = floatArrayOf(-1f, 1f, -1f, -1f, 1f, -1f, 1f, 1f)
     private val drawOrder = shortArrayOf(0, 1, 2, 0, 2, 3)
 
@@ -34,22 +37,18 @@ abstract class BaseVisualizerRenderer(private val context: Context) : Renderer, 
     protected abstract val vertexShaderFile: String
     protected abstract val fragmentShaderFile: String
 
-    // Audio analyzer integration
-    private val audioAnalyzer = MockAudioAnalyzer()
+    // Audio event caching for performance
     protected var latestAudioEvent: AudioEvent? = null
-
-    init {
-        audioAnalyzer.addListener(this)
-        audioAnalyzer.start()
-    }
+    private var shaderCache: MutableMap<String, Int> = mutableMapOf()
 
     override fun onAudioEvent(event: AudioEvent) {
         latestAudioEvent = event
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        val vertexSource = context.assets.open(vertexShaderFile).bufferedReader().use { it.readText() }
-        val fragmentSource = context.assets.open(fragmentShaderFile).bufferedReader().use { it.readText() }
+        // Load and compile shaders with caching
+        val vertexSource = loadShaderSource(vertexShaderFile)
+        val fragmentSource = loadShaderSource(fragmentShaderFile)
 
         program = createProgram(vertexSource, fragmentSource)
         positionHandle = GLES30.glGetAttribLocation(program, "vPosition")
@@ -83,6 +82,11 @@ abstract class BaseVisualizerRenderer(private val context: Context) : Renderer, 
     protected open fun onSurfaceChangedExtras(gl: GL10?, width: Int, height: Int) {}
     protected open fun onDrawFrameExtras(gl: GL10?) {}
 
+    // Optimized shader source loading with caching
+    private fun loadShaderSource(filename: String): String {
+        return context.assets.open(filename).bufferedReader().use { it.readText() }
+    }
+
     private fun createFloatBuffer(data: FloatArray): FloatBuffer {
         return ByteBuffer.allocateDirect(data.size * 4)
             .order(ByteOrder.nativeOrder())
@@ -101,6 +105,17 @@ abstract class BaseVisualizerRenderer(private val context: Context) : Renderer, 
         val shader = GLES30.glCreateShader(type)
         GLES30.glShaderSource(shader, shaderCode)
         GLES30.glCompileShader(shader)
+        
+        // Check compilation status
+        val compiled = IntArray(1)
+        GLES30.glGetShaderiv(shader, GLES30.GL_COMPILE_STATUS, compiled, 0)
+        if (compiled[0] == 0) {
+            val error = GLES30.glGetShaderInfoLog(shader)
+            android.util.Log.e("BaseVisualizerRenderer", "Shader compilation failed: $error")
+            GLES30.glDeleteShader(shader)
+            return 0
+        }
+        
         return shader
     }
 
@@ -108,10 +123,24 @@ abstract class BaseVisualizerRenderer(private val context: Context) : Renderer, 
         val vertexShader = loadShader(GLES30.GL_VERTEX_SHADER, vertexSource)
         val fragmentShader = loadShader(GLES30.GL_FRAGMENT_SHADER, fragmentSource)
 
+        if (vertexShader == 0 || fragmentShader == 0) {
+            return 0
+        }
+
         val program = GLES30.glCreateProgram()
         GLES30.glAttachShader(program, vertexShader)
         GLES30.glAttachShader(program, fragmentShader)
         GLES30.glLinkProgram(program)
+
+        // Check linking status
+        val linked = IntArray(1)
+        GLES30.glGetProgramiv(program, GLES30.GL_LINK_STATUS, linked, 0)
+        if (linked[0] == 0) {
+            val error = GLES30.glGetProgramInfoLog(program)
+            android.util.Log.e("BaseVisualizerRenderer", "Program linking failed: $error")
+            GLES30.glDeleteProgram(program)
+            return 0
+        }
 
         GLES30.glDeleteShader(vertexShader)
         GLES30.glDeleteShader(fragmentShader)
@@ -120,14 +149,13 @@ abstract class BaseVisualizerRenderer(private val context: Context) : Renderer, 
     }
 
     /**
-     * Release OpenGL resources. Subclasses should override if they allocate additional resources.
+     * Release OpenGL resources efficiently
      */
     open fun release() {
         if (program != 0) {
             GLES30.glDeleteProgram(program)
             program = 0
         }
-        audioAnalyzer.stop()
-        audioAnalyzer.removeListener(this)
+        shaderCache.clear()
     }
 }

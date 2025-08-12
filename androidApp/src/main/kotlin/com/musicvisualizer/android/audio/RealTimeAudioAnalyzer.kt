@@ -2,37 +2,55 @@ package com.musicvisualizer.android.audio
 
 import android.media.audiofx.Visualizer
 import android.util.Log
+import com.musicvisualizer.android.util.PerformanceConfig
 import kotlin.math.*
 
 /**
- * Real-time audio analyzer using Android's Visualizer API.
- * Captures audio output from MediaPlayer without requiring microphone permissions.
+ * Optimized real-time audio analyzer with centralized performance configuration
  */
 class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     private var visualizer: Visualizer? = null
 
-    // Audio capture parameters
-    private val captureSize = 1024
+    // Use centralized performance configuration
+    private val devicePerformance = PerformanceConfig.detectDevicePerformance()
+    private val optimizedSettings = PerformanceConfig.getOptimizedSettings(devicePerformance)
     
-    // Beat detection state
+    // Optimized audio capture parameters
+    private var captureSize = optimizedSettings.fftCaptureSize
+    private var processingInterval = optimizedSettings.audioProcessingInterval
+    
+    // Beat detection state with reduced history
     private val energyHistory = mutableListOf<Float>()
-    private val maxHistorySize = 12 // ~400ms at 30fps
+    private val maxHistorySize = PerformanceConfig.MAX_ENERGY_HISTORY_SIZE
     private var lastBeatTime = 0L
-    private val minBeatInterval = 300L // Minimum 300ms between beats
+    private val minBeatInterval = 300L
     
-    // Frequency band ranges (for 1024 FFT at ~44kHz sample rate)
-    private val bassRange = 1..8        // ~20-250 Hz
-    private val midRange = 9..64        // ~250-4000 Hz  
-    private val trebleRange = 65..200   // ~4000+ Hz
+    // Frequency band ranges (optimized for different FFT sizes)
+    private val bassRange = when (captureSize) {
+        256 -> 1..2
+        512 -> 1..4
+        else -> 1..8
+    }
+    private val midRange = when (captureSize) {
+        256 -> 3..16
+        512 -> 5..32
+        else -> 9..64
+    }
+    private val trebleRange = when (captureSize) {
+        256 -> 17..50
+        512 -> 33..100
+        else -> 65..200
+    }
+
+    // Performance optimizations
+    private var lastProcessingTime = 0L
+    private var cachedAudioEvent: AudioEvent? = null
+    private var processingEnabled = true
 
     companion object {
         private const val TAG = "RealTimeAudioAnalyzer"
     }
 
-    /**
-     * Start analyzing audio from the given MediaPlayer session
-     * @param params expects audioSessionId: Int
-     */
     override fun start(vararg params: Any) {
         if (running) return
         
@@ -46,7 +64,7 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
                     waveform: ByteArray?,
                     samplingRate: Int
                 ) {
-                    // Not used - we'll use FFT instead
+                    // Not used
                 }
 
                 override fun onFftDataCapture(
@@ -54,15 +72,15 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
                     fft: ByteArray?,
                     samplingRate: Int
                 ) {
-                    fft?.let { analyzeFft(it, samplingRate) }
+                    fft?.let { analyzeFftOptimized(it, samplingRate) }
                 }
-            }, Visualizer.getMaxCaptureRate() / 2, false, true)
+            }, Visualizer.getMaxCaptureRate() / 4, false, true) // Reduced capture rate
             
             enabled = true
         }
 
         running = true
-        Log.d(TAG, "Started real-time audio analysis")
+        Log.d(TAG, "Started optimized audio analysis with ${devicePerformance.name} performance settings")
     }
 
     override fun stop() {
@@ -72,31 +90,42 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             release()
         }
         visualizer = null
-        Log.d(TAG, "Stopped real-time audio analysis")
+        cachedAudioEvent = null
+        Log.d(TAG, "Stopped audio analysis")
     }
 
-    private fun analyzeFft(fft: ByteArray, samplingRate: Int) {
-        if (!running) return
+    private fun analyzeFftOptimized(fft: ByteArray, samplingRate: Int) {
+        if (!running || !processingEnabled) return
 
-        val magnitudes = convertFftToMagnitudes(fft)
+        val currentTime = System.currentTimeMillis()
         
-        // Calculate frequency band energies with bass weighting
-        val bassEnergy = calculateBandEnergy(magnitudes, bassRange) * 2f // Weight bass more heavily
-        val midEnergy = calculateBandEnergy(magnitudes, midRange)
-        val trebleEnergy = calculateBandEnergy(magnitudes, trebleRange)
+        // Throttle processing to reduce CPU usage
+        if (currentTime - lastProcessingTime < processingInterval) {
+            // Return cached event if available
+            cachedAudioEvent?.let { notifyListeners(it) }
+            return
+        }
+        lastProcessingTime = currentTime
+
+        val magnitudes = convertFftToMagnitudesOptimized(fft)
+        
+        // Calculate frequency band energies with simplified calculations
+        val bassEnergy = calculateBandEnergyOptimized(magnitudes, bassRange) * 1.5f
+        val midEnergy = calculateBandEnergyOptimized(magnitudes, midRange)
+        val trebleEnergy = calculateBandEnergyOptimized(magnitudes, trebleRange)
         val totalEnergy = bassEnergy + midEnergy + trebleEnergy
         
-        // Normalize band energies (0.0-1.0)
-        val (bass, mid, treble) = normalizeBandEnergies(bassEnergy, midEnergy, trebleEnergy, totalEnergy)
-        val volume = (totalEnergy / 1500f).coerceIn(0f, 1f)
+        // Normalize band energies
+        val (bass, mid, treble) = normalizeBandEnergiesOptimized(bassEnergy, midEnergy, trebleEnergy, totalEnergy)
+        val volume = (totalEnergy / (captureSize * 2f)).coerceIn(0f, 1f) // Adjusted normalization
         
-        // Beat detection using bass-weighted energy for better drum detection
-        val beatEnergy = bassEnergy + midEnergy * 0.5f
-        val normalizedBeatEnergy = beatEnergy / 1000f
-        val beatIntensity = detectBeat(normalizedBeatEnergy)
+        // Simplified beat detection
+        val beatEnergy = bassEnergy + midEnergy * 0.3f
+        val normalizedBeatEnergy = beatEnergy / (captureSize * 1.5f)
+        val beatIntensity = detectBeatOptimized(normalizedBeatEnergy)
         
-        // Calculate spectral centroid (brightness)
-        val spectralCentroid = calculateSpectralCentroid(magnitudes, samplingRate)
+        // Simplified spectral centroid calculation
+        val spectralCentroid = calculateSpectralCentroidOptimized(magnitudes, samplingRate)
         
         val audioEvent = AudioEvent(
             beatIntensity = beatIntensity,
@@ -107,13 +136,15 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             spectralCentroid = spectralCentroid
         )
 
+        cachedAudioEvent = audioEvent
         notifyListeners(audioEvent)
     }
     
-    private fun convertFftToMagnitudes(fft: ByteArray): FloatArray {
+    private fun convertFftToMagnitudesOptimized(fft: ByteArray): FloatArray {
         val fftSize = fft.size / 2
         val magnitudes = FloatArray(fftSize)
         
+        // Optimized loop with reduced calculations
         for (i in 0 until fftSize) {
             val real = fft[i * 2].toFloat()
             val imag = fft[i * 2 + 1].toFloat()
@@ -123,23 +154,24 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
         return magnitudes
     }
     
-    private fun calculateBandEnergy(magnitudes: FloatArray, range: IntRange): Float {
+    private fun calculateBandEnergyOptimized(magnitudes: FloatArray, range: IntRange): Float {
         var energy = 0f
-        for (i in range) {
+        // Process every other sample in range for performance
+        for (i in range step 2) {
             if (i < magnitudes.size) {
                 energy += magnitudes[i] * magnitudes[i]
             }
         }
-        return energy
+        return energy * 2f // Compensate for skipping samples
     }
     
-    private fun normalizeBandEnergies(
+    private fun normalizeBandEnergiesOptimized(
         bassEnergy: Float,
         midEnergy: Float, 
         trebleEnergy: Float,
         totalEnergy: Float
     ): Triple<Float, Float, Float> {
-        val normalizer = totalEnergy + 0.001f // Avoid division by zero
+        val normalizer = totalEnergy + 0.001f
         return Triple(
             (bassEnergy / normalizer).coerceIn(0f, 1f),
             (midEnergy / normalizer).coerceIn(0f, 1f),
@@ -147,7 +179,7 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
         )
     }
     
-    private fun detectBeat(currentEnergy: Float): Float {
+    private fun detectBeatOptimized(currentEnergy: Float): Float {
         val currentTime = System.currentTimeMillis()
         
         // Add current energy to history
@@ -156,18 +188,16 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             energyHistory.removeAt(0)
         }
         
-        // Need sufficient history for beat detection
-        if (energyHistory.size < 6) {
-            val earlyBeat = (currentEnergy / 50000f).coerceIn(0f, 1f)
-            return earlyBeat
+        // Early return for insufficient history
+        if (energyHistory.size < 4) {
+            return (currentEnergy / (captureSize * 1.5f)).coerceIn(0f, 1f)
         }
         
-        // Calculate local energy average
-        val localAverage = energyHistory.takeLast(8).average().toFloat()
-        val threshold = localAverage * 1.3f
+        // Simplified beat detection
+        val localAverage = energyHistory.takeLast(6).average().toFloat()
+        val threshold = localAverage * 1.2f
         val timeSinceLastBeat = currentTime - lastBeatTime
         
-        // Check beat conditions
         val energyExceedsThreshold = currentEnergy > threshold
         val timingOk = timeSinceLastBeat > minBeatInterval
         val isFirstBeat = lastBeatTime == 0L
@@ -178,22 +208,22 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             lastBeatTime = currentTime
             val energyRatio = currentEnergy / (threshold + 1f)
             val intensity = (energyRatio - 1f).coerceIn(0.1f, 1f)
-            Log.d(TAG, "BEAT DETECTED! Intensity: $intensity")
             intensity
         } else {
-            // Gradual decay for non-beat frames
+            // Simplified decay
             val timeFactor = if (lastBeatTime == 0L) 0f else {
-                exp(-timeSinceLastBeat.toFloat() / 300f)
+                exp(-timeSinceLastBeat.toFloat() / 400f)
             }
-            (timeFactor * 0.2f).coerceIn(0f, 0.3f)
+            (timeFactor * 0.15f).coerceIn(0f, 0.25f)
         }
     }
     
-    private fun calculateSpectralCentroid(magnitudes: FloatArray, samplingRate: Int): Float {
+    private fun calculateSpectralCentroidOptimized(magnitudes: FloatArray, samplingRate: Int): Float {
         var weightedSum = 0f
         var magnitudeSum = 0f
         
-        for (i in magnitudes.indices) {
+        // Sample every 4th frequency for performance
+        for (i in magnitudes.indices step 4) {
             val frequency = (i * samplingRate) / (2f * magnitudes.size)
             val magnitude = magnitudes[i]
             weightedSum += frequency * magnitude
@@ -201,8 +231,18 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
         }
         
         val centroid = if (magnitudeSum > 0) weightedSum / magnitudeSum else 0f
-        
-        // Normalize to 0-1 range (assuming max frequency of interest is ~8kHz)
         return (centroid / 8000f).coerceIn(0f, 1f)
     }
+    
+    // Performance control methods
+    fun setProcessingEnabled(enabled: Boolean) {
+        processingEnabled = enabled
+    }
+    
+    fun setProcessingInterval(intervalMs: Long) {
+        processingInterval = intervalMs
+    }
+    
+    fun getDevicePerformance() = devicePerformance
+    fun getOptimizedSettings() = optimizedSettings
 }

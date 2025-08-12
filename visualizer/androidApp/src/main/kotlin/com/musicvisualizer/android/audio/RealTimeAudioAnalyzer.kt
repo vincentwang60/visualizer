@@ -16,7 +16,7 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     private val minFreq = 20f
     private val maxFreq = 20000f
     private val sampleRate = 44100f
-    private val bandMaxValues = floatArrayOf(20000f, 12000f, 10000f, 4000f, 2000f, 500f, 100f, 30f)
+    private val bandMaxValues = floatArrayOf(20000f, 12000f, 8000f, 4000f, 1500f, 500f, 100f, 30f)
     
     private val bandRanges = calculateLogBands(minFreq, maxFreq, BAND_COUNT, sampleRate, captureSize)
     private val processedBands = FloatArray(BAND_COUNT)
@@ -139,6 +139,7 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             Log.d(TAG, "Spikes: [${totalSpikesPerChannel.joinToString(", ") { it.toString() }}]")
             Log.d(TAG, "Global Spike History: [${globalSpikeHistory.size} of 16 limit]")
             Log.d(TAG, "Band Averages: [${bandAverages.joinToString(", ") { "%.2f".format(it) }}]")
+            Log.d(TAG, "Smoothed High Freq Energy: [${smoothedHighFreqEnergy}]")
         }
     }
 

@@ -18,7 +18,7 @@ class MockAudioAnalyzer : BaseAudioAnalyzer() {
 
     companion object {
         private const val TAG = "MockAudioAnalyzer"
-        private const val FRAME_INTERVAL_MS = 32L // ~30 FPS
+        private const val FRAME_INTERVAL_MS = 16L // ~60 FPS
     }
 
     override fun start(vararg params: Any) {
@@ -76,6 +76,10 @@ class MockAudioAnalyzer : BaseAudioAnalyzer() {
         val bass = (fftTest[0] + fftTest[1]) / 2f
         val mid = (fftTest[2] + fftTest[3] + fftTest[4]) / 3f
         val treble = (fftTest[5] + fftTest[6] + fftTest[7]) / 3f
+        
+        // Calculate low and high frequency energy
+        val lowFrequencyEnergy = (fftTest[0] + fftTest[1] + fftTest[2] + fftTest[3]) / 4f
+        val highFrequencyEnergy = (fftTest[4] + fftTest[5] + fftTest[6] + fftTest[7]) / 4f
 
         return AudioEvent(
             beatIntensity = beatIntensity,
@@ -83,7 +87,9 @@ class MockAudioAnalyzer : BaseAudioAnalyzer() {
             bass = bass,
             mid = mid,
             treble = treble,
-            fftTest = fftTest
+            fftTest = fftTest,
+            lowFrequencyEnergy = lowFrequencyEnergy,
+            highFrequencyEnergy = highFrequencyEnergy
         )
     }
 

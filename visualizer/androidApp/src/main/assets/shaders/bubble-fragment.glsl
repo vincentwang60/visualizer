@@ -14,6 +14,9 @@ uniform float u_bubbleRadii[MAX_BUBBLES];
 uniform vec2 u_bubblePositions[MAX_BUBBLES];
 uniform float u_bubbleSeeds[MAX_BUBBLES];
 uniform vec2 u_lightPosition;
+uniform float u_tilt;
+uniform float u_chromaticAberration;
+uniform float u_strobe;
 
 out vec4 fragColor;
 
@@ -62,15 +65,36 @@ vec2 rotateGlobe(float seed, vec2 pos, float radius) {
     );
 }
 
-void main() {
+vec2 applyRotate(vec2 fragCoord) {
+    // Work relative to screen center
+    vec2 center = u_resolution * 0.5;
+    vec2 offsetFromCenter = fragCoord - center;
+    
+    // Rotation: oscillates left/right based on sin(u_time), max 30 degrees
+    float maxRotation = radians(30.0); // 30 degrees in radians
+    float rotationAngle = u_tilt * sin(u_time) * maxRotation;
+    
+    // 2D rotation matrix
+    mat2 rotMatrix = mat2(
+        cos(rotationAngle), -sin(rotationAngle),
+        sin(rotationAngle),  cos(rotationAngle)
+    );
+    
+    // Apply rotation
+    vec2 rotatedOffset = rotMatrix * offsetFromCenter;
+    
+    return center + rotatedOffset;
+}
+
+// Function to render bubbles at a given coordinate
+vec3 renderBubbles(vec2 frag_coord) {
     float edge_thickness = 0.002;
     float inner_fade_distance = 0.03;
-    float blending_factor = 0.03;
+    float blending_factor = 0.05;
     float flow_factor = 1.;
     
     float outline_weight = 0.0;
     vec3 final_color = vec3(0.0);
-    vec2 frag_coord = gl_FragCoord.xy;
     float d = 10000.0;
     vec3 final_outline_color = vec3(0.0);
     int num_bubbles = int(u_numBubbles);
@@ -79,7 +103,7 @@ void main() {
 
     float animation_time = u_time * flow_factor;
 
-    // Bubble 
+    // Bubble rendering
     for (int i = 0; i < MAX_BUBBLES; i++) {
         if (i >= num_bubbles) break;
         vec3 target_color = u_bubbleColors[i];
@@ -99,7 +123,7 @@ void main() {
         vec2 sphere_pos = vec2(cos(globe_uv.x * 2.0 * PI), sin(globe_uv.x * 2.0 * PI) + globe_uv.y * 2.0);
         vec2 mask_uv = watercolor_noise(sphere_pos, animation_time, 5, u_bubbleSeeds[i]);
         vec3 outline_color = hsv2rgb(vec3(fract((mask_uv.x + mask_uv.y) * 0.15), .7, 1.0));
-        outline_color= mix(target_color * 1.2, outline_color, 0.3);
+        outline_color= mix(target_color * 1.2, outline_color, 0.5);
         float outline = 1.0 - di / blending_factor;
 
         final_outline_color += outline_color * outline;
@@ -141,5 +165,47 @@ void main() {
         float specular = 1. + (smoothstep(0.0, 0.5, max(dot(grad, light_dir) - 0.5, 0.0)));
         color *= specular * specular;
     }
-    fragColor = vec4(color, 1.0);
+    color *= u_strobe;
+    return color;
+}
+
+void main() {
+    // Only do expensive CA if the effect is strong enough to notice
+    if (u_chromaticAberration > 0.5) {
+        vec2 uv = gl_FragCoord.xy / u_resolution;
+        vec2 caDirection = vec2(cos(u_time), sin(u_time));
+        float distanceFromCenter = length(uv - vec2(0.5));
+        float caStrength = (u_chromaticAberration) * .15 * distanceFromCenter;
+
+        // Apply scaling in UV space
+        vec2 redUV = uv * (1.0 + caDirection * caStrength);
+        vec2 greenUV = uv;
+        vec2 blueUV = uv * (1.0 - caDirection * caStrength);
+
+        // Convert back to pixel coordinates
+        vec2 redCoord = applyRotate(redUV * u_resolution);
+        vec2 greenCoord = applyRotate(greenUV * u_resolution);
+        vec2 blueCoord = applyRotate(blueUV * u_resolution);
+
+        vec3 redChannel = renderBubbles(redCoord);
+        vec3 greenChannel = renderBubbles(greenCoord);
+        vec3 blueChannel = renderBubbles(blueCoord);
+
+        fragColor = vec4(redChannel.r, greenChannel.g, blueChannel.b, 1.0);
+    } else {
+        // Cheap version for subtle effects
+        vec2 frag_coord = applyRotate(gl_FragCoord.xy);
+        vec3 color = renderBubbles(frag_coord);
+        
+        // Apply cheap chromatic aberration as a post-effect
+        vec2 center = u_resolution * 0.5;
+        vec2 offsetFromCenter = gl_FragCoord.xy - center;
+        float distanceFromCenter = length(offsetFromCenter) / length(u_resolution);
+        
+        float caStrength = u_chromaticAberration * distanceFromCenter * 0.01;
+        color.r *= (1.0 + caStrength);
+        color.b *= (1.0 - caStrength);
+        
+        fragColor = vec4(color, 1.0);
+    }
 }

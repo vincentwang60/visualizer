@@ -38,6 +38,9 @@ class BubbleRenderer(
     private var bubblePositionsHandle = 0
     private var bubbleSeedsHandle = 0
     private var lightPositionHandle = 0
+    private var tiltHandle = 0
+    private var chromaticAberrationHandle = 0
+    private var strobeHandle = 0
 
     init {
         audioAnalyzer.addListener(bubbleSystem)
@@ -52,6 +55,9 @@ class BubbleRenderer(
         bubblePositionsHandle = GLES30.glGetUniformLocation(program, "u_bubblePositions")
         bubbleSeedsHandle = GLES30.glGetUniformLocation(program, "u_bubbleSeeds")
         lightPositionHandle = GLES30.glGetUniformLocation(program, "u_lightPosition")
+        tiltHandle = GLES30.glGetUniformLocation(program, "u_tilt")
+        chromaticAberrationHandle = GLES30.glGetUniformLocation(program, "u_chromaticAberration")
+        strobeHandle = GLES30.glGetUniformLocation(program, "u_strobe")
     }
 
     override fun onDrawFrameExtras(gl: GL10?) {
@@ -70,7 +76,9 @@ class BubbleRenderer(
         setUniform(timeHandle) { GLES30.glUniform1f(it, currentTime) }
         setUniform(numBubblesHandle) { GLES30.glUniform1f(it, bubbleSystem.getBubbleCount().toFloat()) }
         setUniform(lightPositionHandle) { GLES30.glUniform2f(it, bubbleSystem.getLightPosition().first, bubbleSystem.getLightPosition().second) }
-
+        setUniform(tiltHandle) { GLES30.glUniform1f(it, bubbleSystem.getTilt()) } // Reduced tilt intensity to 0.05 radians
+        setUniform(chromaticAberrationHandle) { GLES30.glUniform1f(it, bubbleSystem.getChromaticAberration()) }
+        setUniform(strobeHandle) { GLES30.glUniform1f(it, bubbleSystem.getStrobe()) }
         // Set array uniforms using bubble system data
         setUniform(bubblePositionsHandle) { 
             GLES30.glUniform2fv(it, bubbleSystem.getBubbleCount(), bubbleSystem.bubblePositions, 0) 

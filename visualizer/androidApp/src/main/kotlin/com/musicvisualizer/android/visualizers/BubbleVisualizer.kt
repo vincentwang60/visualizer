@@ -41,7 +41,8 @@ class BubbleRenderer(
     private var tiltHandle = 0
     private var chromaticAberrationHandle = 0
     private var strobeHandle = 0
-
+    private var fftHandle = 0
+    private var smoothEnergyHandle = 0
     init {
         audioAnalyzer.addListener(bubbleSystem)
     }
@@ -58,6 +59,8 @@ class BubbleRenderer(
         tiltHandle = GLES30.glGetUniformLocation(program, "u_tilt")
         chromaticAberrationHandle = GLES30.glGetUniformLocation(program, "u_chromaticAberration")
         strobeHandle = GLES30.glGetUniformLocation(program, "u_strobe")
+        fftHandle = GLES30.glGetUniformLocation(program, "u_fft")
+        smoothEnergyHandle = GLES30.glGetUniformLocation(program, "u_smoothEnergy")
     }
 
     override fun onDrawFrameExtras(gl: GL10?) {
@@ -69,6 +72,7 @@ class BubbleRenderer(
 
         // Update bubble system
         val currentTime = bubbleSystem.update()
+        Log.d(TAG, "currentTime: $currentTime")
         val config = bubbleSystem.getConfig()
 
         // Set basic uniforms
@@ -79,6 +83,8 @@ class BubbleRenderer(
         setUniform(tiltHandle) { GLES30.glUniform1f(it, bubbleSystem.getTilt()) } // Reduced tilt intensity to 0.05 radians
         setUniform(chromaticAberrationHandle) { GLES30.glUniform1f(it, bubbleSystem.getChromaticAberration()) }
         setUniform(strobeHandle) { GLES30.glUniform1f(it, bubbleSystem.getStrobe()) }
+        setUniform(fftHandle) { GLES30.glUniform1fv(it, 8, bubbleSystem.getFft(), 0) }
+        setUniform(smoothEnergyHandle) { GLES30.glUniform1f(it, bubbleSystem.getSmoothEnergy()) }
         // Set array uniforms using bubble system data
         setUniform(bubblePositionsHandle) { 
             GLES30.glUniform2fv(it, bubbleSystem.getBubbleCount(), bubbleSystem.bubblePositions, 0) 

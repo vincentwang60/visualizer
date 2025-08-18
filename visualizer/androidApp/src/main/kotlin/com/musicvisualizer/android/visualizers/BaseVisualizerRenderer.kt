@@ -3,7 +3,6 @@ package com.musicvisualizer.android.visualizers
 import android.content.Context
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView.Renderer
-import com.musicvisualizer.android.audio.MockAudioAnalyzer
 import com.musicvisualizer.android.audio.AudioEvent
 import com.musicvisualizer.android.audio.AudioEventListener
 import java.nio.ByteBuffer

@@ -7,8 +7,8 @@ import com.musicvisualizer.android.audio.AudioEventListener
 import kotlin.math.*
 import kotlin.random.Random
 
-private const val MAX_BUBBLES = 20
-private const val BUBBLE_LIFETIME_MS = 500L
+private const val MAX_BUBBLES = 16
+private const val BUBBLE_LIFETIME_MS = 1000L
 private const val FRAME_TIME_NS = 16_000_000L
 private const val TAG = "MusicViz-Bubble"
 
@@ -40,10 +40,6 @@ private data class Bubble(
 
     fun update(time: Float, lowFreqEnergy: Float = 0f, deltaTime: Float = 0.016f) {
         if (isCentral) {
-            val motionRange = 0.05f
-            val offsetX = motionRange * sin(time * 0.25f)
-            val offsetY = motionRange * cos(time * 0.25f + 1.5f)
-            position = Pair(0.5f + offsetX, 0.5f + offsetY)
             radius = baseRadius + lowFreqEnergy * 0.12f
         } else {
             val age = (System.currentTimeMillis() - creationTime) / 1000f
@@ -98,6 +94,8 @@ class BubbleSystem(private val config: BubbleConfig = BubbleConfig()) : AudioEve
     private var chromaticAberration = 0f
     private var strobeThreshold = 0.8f
     private var strobe = 0f
+    private var fft = FloatArray(8)
+    private var smoothEnergy = 0f
 
     val bubbleColors = FloatArray(MAX_BUBBLES * 3)
     val bubbleRadii = FloatArray(MAX_BUBBLES)
@@ -119,13 +117,18 @@ class BubbleSystem(private val config: BubbleConfig = BubbleConfig()) : AudioEve
     override fun onAudioEvent(event: AudioEvent) {
         currentLowFreqEnergy = event.lowFrequencyEnergy
         currentHighFreqEnergy = event.highFrequencyEnergy
-
-        if (event.fftTest.max() > strobeThreshold) {
-            strobeThreshold = (event.fftTest.max() + strobeThreshold) / 2.0f + 0.05f
-            strobe = 0.6f + strobeThreshold
+        smoothEnergy = event.smoothEnergy
+        for (i in fft.indices) {
+            fft[i] = fft[i] * 0.9f + event.fftTest[i] * 0.1f
+        }
+        
+        val strobeValue = event.fftTest.map { max(it - 0.5f, 0f) }.sum() * 1.5f
+        if (strobeValue > strobeThreshold) {
+            strobeThreshold = min(2.0f, (strobeValue + strobeThreshold) / 2f + 0.05f)
+            strobe += (strobeValue - strobe) * 0.5f
         } else {
-            strobeThreshold = max(0.5f, strobeThreshold - 0.01f)
-            strobe = 1.0f
+            strobeThreshold = max(1.0f, strobeThreshold - 0.02f)
+            strobe += (1f - strobe) * 0.5f
         }
         
         for (spike in event.spikes) {
@@ -171,7 +174,7 @@ class BubbleSystem(private val config: BubbleConfig = BubbleConfig()) : AudioEve
         lastFrameTime = now
         
         if (now - lastTimeUpdate > FRAME_TIME_NS / 2) {
-            cachedTime = ((now - startTime) / 1_000_000_000f) % (4f * PI.toFloat())
+            cachedTime = ((now - startTime) / 10_000_000_000.0 % (2 * PI)).toFloat()
             lastTimeUpdate = now
         }
         
@@ -197,14 +200,7 @@ class BubbleSystem(private val config: BubbleConfig = BubbleConfig()) : AudioEve
 
         lightAngle += 0.01f
         tilt = currentHighFreqEnergy * 3.0f + 2.0f * sin(cachedTime * 0.5f) + 1.5f * cos(cachedTime * 0.75f) + 0.8f * sin(cachedTime * 1.25f)
-        chromaticAberration = bubbles.size.toFloat() / MAX_BUBBLES.toFloat() * currentLowFreqEnergy * 2.0f
-        
-        if (chromaticAberration > 0.5f) {
-            Log.d(TAG, "Chromatic Aberration: [${chromaticAberration}]")
-        }
-        if (strobe > 1.0f) {
-            Log.d(TAG, "Strobe: [${strobe}]")
-        }
+        chromaticAberration = (bubbles.size.toFloat() / MAX_BUBBLES.toFloat() * currentLowFreqEnergy * 2.0f - 0.4f).coerceIn(0.0f, 0.2f) * .15f
         return cachedTime
     }
 
@@ -214,4 +210,6 @@ class BubbleSystem(private val config: BubbleConfig = BubbleConfig()) : AudioEve
     fun getTilt() = tilt
     fun getChromaticAberration() = chromaticAberration
     fun getStrobe() = strobe
+    fun getFft() = fft
+    fun getSmoothEnergy() = smoothEnergy
 }

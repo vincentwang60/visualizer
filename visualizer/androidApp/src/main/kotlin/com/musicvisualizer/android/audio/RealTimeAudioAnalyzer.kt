@@ -26,8 +26,8 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     private val spikeThreshold = 0.4f
     private val loudThreshold = 0.8f
     private val minSpikeInterval = 100L
-    private val maxGlobalSpikes = 16
-    private val globalWindowMs = 500L
+    private val maxGlobalSpikes = 12
+    private val globalWindowMs = 1000L
 
     private val lastSpikeTime = LongArray(BAND_COUNT) { 0L }
     private val globalSpikeHistory = mutableListOf<Long>()
@@ -36,6 +36,8 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     private val lowFreqSmoothingFactor = 0.75f
     private var smoothedHighFreqEnergy = 0f
     private val highFreqSmoothingFactor = 0.75f
+    private var smoothedEnergy = 0f
+    private val energySmoothingFactor = 0.95f
     private val bandSums = FloatArray(BAND_COUNT) { 0f }
     private val bandCounts = IntArray(BAND_COUNT) { 0 }
     private val bandAverages = FloatArray(BAND_COUNT) { 0f }
@@ -72,6 +74,7 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
         totalSpikesPerChannel.fill(0L)
         smoothedLowFreqEnergy = 0f
         smoothedHighFreqEnergy = 0f
+        smoothedEnergy = 0f
         bandSums.fill(0f)
         bandCounts.fill(0)
         bandAverages.fill(0f)
@@ -96,13 +99,16 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
         smoothedLowFreqEnergy = smoothedLowFreqEnergy * lowFreqSmoothingFactor + currentLowFreqEnergy * (1f - lowFreqSmoothingFactor)
         val currentHighFreqEnergy = (processedBands[4] + processedBands[5] + processedBands[6] + processedBands[7]) / 4f
         smoothedHighFreqEnergy = smoothedHighFreqEnergy * highFreqSmoothingFactor + currentHighFreqEnergy * (1f - highFreqSmoothingFactor)
+        val currentEnergy = (smoothedLowFreqEnergy + smoothedHighFreqEnergy) / 2f
+        smoothedEnergy = smoothedEnergy * energySmoothingFactor + currentEnergy * (1f - energySmoothingFactor)
         debugLog(rawBands, currentTime)
         notifyListeners(AudioEvent(
             fftTest = processedBands.copyOf(),
             volume = processedBands.average().toFloat(),
             spikes = detectedSpikes,
             lowFrequencyEnergy = smoothedLowFreqEnergy,
-            highFrequencyEnergy = smoothedHighFreqEnergy
+            highFrequencyEnergy = smoothedHighFreqEnergy,
+            smoothEnergy = smoothedEnergy
         ))
     }
 
@@ -140,6 +146,7 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             Log.d(TAG, "Global Spike History: [${globalSpikeHistory.size} of 16 limit]")
             Log.d(TAG, "Band Averages: [${bandAverages.joinToString(", ") { "%.2f".format(it) }}]")
             Log.d(TAG, "Smoothed High Freq Energy: [${smoothedHighFreqEnergy}]")
+            Log.d(TAG, "Smoothed Energy: [${smoothedEnergy}]")
         }
     }
 

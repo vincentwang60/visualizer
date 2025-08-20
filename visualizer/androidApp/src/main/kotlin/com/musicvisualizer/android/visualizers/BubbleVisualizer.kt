@@ -72,7 +72,6 @@ class BubbleRenderer(
 
         // Update bubble system
         val currentTime = bubbleSystem.update()
-        Log.d(TAG, "currentTime: $currentTime")
         val config = bubbleSystem.getConfig()
 
         // Set basic uniforms

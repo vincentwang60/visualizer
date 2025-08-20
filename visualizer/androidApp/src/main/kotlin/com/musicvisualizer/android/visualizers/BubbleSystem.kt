@@ -8,7 +8,6 @@ import kotlin.math.*
 import kotlin.random.Random
 
 private const val MAX_BUBBLES = 16
-private const val BUBBLE_LIFETIME_MS = 1000L
 private const val FRAME_TIME_NS = 16_000_000L
 private const val TAG = "MusicViz-Bubble"
 
@@ -17,6 +16,7 @@ data class BubbleConfig(
     val baseRadius: Float = 0.08f,
     val maxSpikeRadius: Float = 0.08f,
     val minSpikeRadius: Float = 0.03f,
+    val bubbleLifetime: Long = 500L
 )
 
 private data class Bubble(
@@ -43,7 +43,7 @@ private data class Bubble(
             radius = baseRadius + lowFreqEnergy * 0.12f
         } else {
             val age = (System.currentTimeMillis() - creationTime) / 1000f
-            val orbitProgress = sin(age / (BUBBLE_LIFETIME_MS / 1000f) * PI.toFloat())
+            val orbitProgress = sin(age / (config.bubbleLifetime / 1000f) * PI.toFloat())
             currentRadius = centralBubbleRadius * (0.5f + orbitProgress * (maxOrbitRadius / centralBubbleRadius - 0.5f))
             currentAngle += angularVelocity * deltaTime
             
@@ -54,7 +54,7 @@ private data class Bubble(
         color = getColor(time, lowFreqEnergy)
     }
     
-    fun isExpired() = !isCentral && System.currentTimeMillis() - creationTime > BUBBLE_LIFETIME_MS
+    fun isExpired() = !isCentral && System.currentTimeMillis() - creationTime > config.bubbleLifetime
     
     private fun getColor(time: Float, lowFreqEnergy: Float = 0f): FloatArray {
         val hue = if (isCentral) {
@@ -200,7 +200,6 @@ class BubbleSystem(private val config: BubbleConfig = BubbleConfig()) : AudioEve
 
         lightAngle += 0.01f
         tilt = currentHighFreqEnergy * 3.0f + 2.0f * sin(cachedTime * 0.5f) + 1.5f * cos(cachedTime * 0.75f) + 0.8f * sin(cachedTime * 1.25f)
-        chromaticAberration = (bubbles.size.toFloat() / MAX_BUBBLES.toFloat() * currentLowFreqEnergy * 2.0f - 0.4f).coerceIn(0.0f, 0.2f) * .15f
         return cachedTime
     }
 
@@ -208,7 +207,7 @@ class BubbleSystem(private val config: BubbleConfig = BubbleConfig()) : AudioEve
     fun getBubbleCount() = bubbles.size
     fun getLightPosition() = Pair(0.5f + 2.0f * cos(lightAngle), 0.5f + 2.0f * sin(lightAngle))
     fun getTilt() = tilt
-    fun getChromaticAberration() = chromaticAberration
+    fun getChromaticAberration() = (strobe - 1.0f) * 0.05f
     fun getStrobe() = strobe
     fun getFft() = fft
     fun getSmoothEnergy() = smoothEnergy

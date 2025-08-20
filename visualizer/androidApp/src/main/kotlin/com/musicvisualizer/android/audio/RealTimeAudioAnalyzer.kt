@@ -24,10 +24,10 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
     private var lastPrintTime: Long? = null
     
     private val spikeThreshold = 0.4f
-    private val loudThreshold = 0.8f
+    private val loudThreshold = 0.95f
     private val minSpikeInterval = 100L
     private val maxGlobalSpikes = 12
-    private val globalWindowMs = 1000L
+    private val globalWindowMs = 500L
 
     private val lastSpikeTime = LongArray(BAND_COUNT) { 0L }
     private val globalSpikeHistory = mutableListOf<Long>()
@@ -143,7 +143,7 @@ class RealTimeAudioAnalyzer : BaseAudioAnalyzer() {
             //Log.d(TAG, "Raw: [${rawBands.joinToString(", ") { "%.0f".format(it) }}]")
             Log.d(TAG, "Processed: [${processedBands.joinToString(", ") { "%.2f".format(it) }}]")
             Log.d(TAG, "Spikes: [${totalSpikesPerChannel.joinToString(", ") { it.toString() }}]")
-            Log.d(TAG, "Global Spike History: [${globalSpikeHistory.size} of 16 limit]")
+            Log.d(TAG, "Global Spike History: [${globalSpikeHistory.size} of ${maxGlobalSpikes} limit]")
             Log.d(TAG, "Band Averages: [${bandAverages.joinToString(", ") { "%.2f".format(it) }}]")
             Log.d(TAG, "Smoothed High Freq Energy: [${smoothedHighFreqEnergy}]")
             Log.d(TAG, "Smoothed Energy: [${smoothedEnergy}]")

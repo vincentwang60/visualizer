@@ -77,7 +77,7 @@ class BubbleRenderer(
         // Set basic uniforms
         setUniform(resolutionHandle) { GLES30.glUniform2f(it, width.toFloat(), height.toFloat()) }
         setUniform(timeHandle) { GLES30.glUniform1f(it, currentTime) }
-        setUniform(numBubblesHandle) { GLES30.glUniform1f(it, bubbleSystem.getBubbleCount().toFloat()) }
+        setUniform(numBubblesHandle) { GLES30.glUniform1i(it, bubbleSystem.getBubbleCount()) }
         setUniform(lightPositionHandle) { GLES30.glUniform2f(it, bubbleSystem.getLightPosition().first, bubbleSystem.getLightPosition().second) }
         setUniform(tiltHandle) { GLES30.glUniform1f(it, bubbleSystem.getTilt()) } // Reduced tilt intensity to 0.05 radians
         setUniform(chromaticAberrationHandle) { GLES30.glUniform1f(it, bubbleSystem.getChromaticAberration()) }

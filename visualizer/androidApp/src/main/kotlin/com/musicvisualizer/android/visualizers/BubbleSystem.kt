@@ -199,7 +199,7 @@ class BubbleSystem(private val config: BubbleConfig = BubbleConfig()) : AudioEve
         }
 
         lightAngle += 0.01f
-        tilt = currentHighFreqEnergy * 3.0f + 2.0f * sin(cachedTime * 0.5f) + 1.5f * cos(cachedTime * 0.75f) + 0.8f * sin(cachedTime * 1.25f)
+        tilt = currentHighFreqEnergy
         return cachedTime
     }
 
@@ -207,7 +207,7 @@ class BubbleSystem(private val config: BubbleConfig = BubbleConfig()) : AudioEve
     fun getBubbleCount() = bubbles.size
     fun getLightPosition() = Pair(0.5f + 2.0f * cos(lightAngle), 0.5f + 2.0f * sin(lightAngle))
     fun getTilt() = tilt
-    fun getChromaticAberration() = (strobe - 1.0f) * 0.05f
+    fun getChromaticAberration() = min((strobe - 1.3f) * 0.1f, 0.05f)
     fun getStrobe() = strobe
     fun getFft() = fft
     fun getSmoothEnergy() = smoothEnergy

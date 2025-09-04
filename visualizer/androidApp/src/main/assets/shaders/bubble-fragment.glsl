@@ -63,7 +63,7 @@ vec2 watercolorNoise(vec2 uv, int iters, float seed) {
 vec3 renderDots(vec2 coord) {
     float len = length(coord);
     float spiral = atan(coord.y, coord.x) * 5.0 + len * 25.0;
-    float dotSize = (sin(spiral + g_time10 + u_smoothEnergy * 10.0) + 0.8) * 0.03;
+    float dotSize = (sin(spiral + g_time10 + u_smoothEnergy * 20.0) + 0.8) * 0.03;
     vec2 gridPos = fract(coord * (20.0 + u_smoothEnergy * 20.0)) - 0.5;
     float intensity = step(length(gridPos), dotSize);
     return intensity * hsv2rgb(vec3(fract(spiral * 0.1), 0.4, (0.5 + u_smoothEnergy * 3.0) * (len - OCT_MAX_SIZE)));
@@ -85,9 +85,9 @@ vec3 renderOctagon(vec2 coord) {
         float d2 = cos(floor(0.5 + (theta + PI / 8.0) / (2.0 * r)) * (2.0 * r) - (theta + PI / 8.0)) * len;
         float edgeLen2 = edgeLen / 1.31;
         mask = max(mask, smoothstep(edgeLen2 - 0.004, edgeLen2 + 0.004, d2) - smoothstep(edgeLen2, edgeLen2 + 0.004, d2));
-        mask *= 1.0 + fftSize * 10.0;
+        mask *= 1.0 + fftSize * 15.0;
     }
-    return vec3(mask * 0.1);
+    return hsv2rgb(vec3(u_time, 0.2, mask * 0.1));
 }
 
 vec3 renderBubbles(vec2 coord) {

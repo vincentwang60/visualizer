@@ -5,45 +5,56 @@ precision mediump float;
 #define PI 3.14159265
 #define INV_PI 0.318310
 #define INV_2PI 0.159155
-#define OCT_MAX_SIZE 0.5
 
 uniform vec2 u_resolution;
 uniform float u_time;
-uniform float u_numBubbles;
-uniform vec3 u_bubbleColors[MAX_BUBBLES];
-uniform float u_bubbleRadii[MAX_BUBBLES];
-uniform vec2 u_bubblePositions[MAX_BUBBLES];
-uniform float u_bubbleSeeds[MAX_BUBBLES];
-uniform vec2 u_lightPosition;
-uniform float u_tilt;
-uniform float u_chromaticAberration;
-uniform float u_strobe;
-uniform float u_fft[8];
-uniform float u_smoothEnergy;
 
 out vec4 fragColor;
 
-vec3 renderSquare(vec2 pos) {
-    float edge_thickness = 0.004;
-    float mask = 0.0;
-    float base_angle = atan(pos.x, pos.y);
-    //float base_angle = atan(pos.x, pos.y) + u_time / 4.0 + u_smoothEnergy * 2.0;
-    
-    float r = PI / 4.0;
-    for (int i = 0; i < 8; i++) {
-        float fftSize = 0.05;
-        float edge_length = OCT_MAX_SIZE;
-        float theta = base_angle + PI * float(i) / 16.0;
-        float d = cos(floor(0.5 + theta / r) * r - theta) * length(pos);
-        mask = max(mask, smoothstep(edge_length - edge_thickness, edge_length, d) - smoothstep(edge_length, edge_length + edge_thickness, d));
-        d = cos(floor(0.5 + (theta + PI / 8.0) / (2.0 * r)) * (2.0 * r) - (theta + PI / 8.0)) * length(pos);        
-        mask = max(mask, smoothstep(edge_length / 1.31 - edge_thickness, edge_length / 1.31, d) - smoothstep(edge_length / 1.31, edge_length / 1.31 + edge_thickness, d));
-        mask *= 1.0 + fftSize * 5.0;
+float g_time10;
+
+void initGlobals() {
+    g_time10 = mod(u_time * 10.0, 6.28318531);
+}
+
+vec3 hsv2rgb(vec3 c) {
+    vec3 p = abs(fract(c.x + vec3(1.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0) - 1.0;
+    return c.z * mix(vec3(1.0), clamp(p, 0.0, 1.0), c.y);
+}
+
+vec2 watercolorNoise(vec2 uv, int iters, float seed) {
+    for (int i = 1; i < iters; i++) {
+        float factor = 1.0 / float(i);
+        float freq = float(i) * (7.0 - float(iters));
+        float seedOffset = seed * 5.0;
+        uv.x += factor * sin(freq * uv.y + u_time) + seedOffset;
+        uv.y += factor * cos(freq * uv.x + u_time) + seedOffset;
     }
-    return vec3(mask * 0.2);
+    return uv;
+}
+
+vec2 friggeNoise(vec2 uv, int iters) {
+    float len = length(uv);
+    float atan = atan(uv.x, uv.y);
+    for (int i = 1; i < iters; i++) {
+        float factor = 1.0 / float(i);
+        float freq = float(i) * 2.;
+        float ripple1 = sin(freq * uv.y + u_time);
+        float ripple2 = sin(freq * uv.x + u_time);
+        float ripple3 = 0.0;
+        uv.x += factor * (ripple2 + ripple3);
+        uv.y += factor * (ripple1 + ripple3);
+        len += factor * ripple1;
+    }
+    return uv;
 }
 
 void main() {
+    initGlobals();
     vec2 pos = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
-    fragColor = vec4(renderSquare(pos), 1.0);
+    vec2 maskUV = friggeNoise(pos, 5);
+    float r = cos(maskUV.x + maskUV.y + 1.0) * .5 + .5;
+    float g = sin(maskUV.x + maskUV.y + 1.0) * .5 + .5;
+    float b = (sin(maskUV.x + maskUV.y) + cos(maskUV.x + maskUV.y)) * .3 + .5;
+    fragColor = vec4(r, g, b, 1.0);
 }

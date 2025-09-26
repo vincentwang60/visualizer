@@ -12,8 +12,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.musicvisualizer.android.visualizers.Visualizer
 import com.musicvisualizer.android.visualizers.BubbleVisualizer
-import com.musicvisualizer.android.visualizers.CircleColorVisualizer
-import com.musicvisualizer.android.VisualizerCarouselGestureListener
+// Removed alternate visualizer and swipe carousel
 import com.musicvisualizer.android.R
 import com.musicvisualizer.android.audio.AudioAnalyzer
 import com.musicvisualizer.android.audio.RealTimeAudioAnalyzer
@@ -46,16 +45,13 @@ class VisualizerGLSurfaceView(
 class Home : Activity() {
     private lateinit var glView: GLSurfaceView
     private lateinit var visualizer: Visualizer
-    private lateinit var gestureDetector: GestureDetector
+    // Swipe gesture removed
     private lateinit var renderer: Renderer
     private var mediaPlayer: MediaPlayer? = null
     private lateinit var audioAnalyzer: AudioAnalyzer
     
-    private val visualizers: List<Visualizer> = listOf(
-        BubbleVisualizer(),
-        CircleColorVisualizer(),
-    )
-    private var currentVisualizerIndex = 0
+    // Single visualizer
+    private val bubbleVisualizer: Visualizer = BubbleVisualizer()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,55 +59,16 @@ class Home : Activity() {
         // Initialize real-time audio analyzer
         audioAnalyzer = RealTimeAudioAnalyzer()
         
-        visualizer = visualizers[currentVisualizerIndex]
+        visualizer = bubbleVisualizer
         renderer = visualizer.createRenderer(this, audioAnalyzer)
         glView = VisualizerGLSurfaceView(this, visualizer, renderer, audioAnalyzer)
         setContentView(glView)
         hideSystemUI()
         
         audioAnalyzer.start(0)
-        
-        gestureDetector = GestureDetector(this, VisualizerCarouselGestureListener(
-            onSwipeLeft = { showNextVisualizer() },
-            onSwipeRight = { showPreviousVisualizer() }
-        ))
-
-        glView.setOnTouchListener { _, event ->
-            gestureDetector.onTouchEvent(event)
-            true
-        }
     }
 
-    private fun showNextVisualizer() {
-        currentVisualizerIndex = (currentVisualizerIndex + 1) % visualizers.size
-        updateVisualizer()
-    }
-
-    private fun showPreviousVisualizer() {
-        currentVisualizerIndex = if (currentVisualizerIndex - 1 < 0) visualizers.size - 1 else currentVisualizerIndex - 1
-        updateVisualizer()
-    }
-
-    private fun updateVisualizer() {
-        // Release previous renderer
-        (renderer as? com.musicvisualizer.android.visualizers.BaseVisualizerRenderer)?.release()
-        
-        // Create new visualizer and renderer
-        visualizer = visualizers[currentVisualizerIndex]
-        renderer = visualizer.createRenderer(this, audioAnalyzer)
-        
-        // Remove old view and create new one
-        val parent = glView.parent as? android.view.ViewGroup
-        parent?.removeView(glView)
-        glView = VisualizerGLSurfaceView(this, visualizer, renderer, audioAnalyzer)
-        setContentView(glView)
-        
-        // Re-attach touch listener
-        glView.setOnTouchListener { _, event ->
-            gestureDetector.onTouchEvent(event)
-            true
-        }
-    }
+    // No carousel or switching; bubble visualizer is fixed
 
     private fun hideSystemUI() {
         // Enable drawing behind cutout (notch) for true fullscreen

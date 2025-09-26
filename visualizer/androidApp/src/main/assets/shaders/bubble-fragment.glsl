@@ -52,10 +52,10 @@ vec2 rotateCoord(vec2 coord, float s, float c) {
 vec2 watercolorNoise(vec2 uv, int iters, float seed) {
     for (int i = 1; i < iters; i++) {
         float factor = 1.0 / float(i);
-        float freq = float(i) * (7.0 - float(iters));
+        float freq = float(i) * 2.5 ;
         float seedOffset = seed * 5.0;
-        uv.x += factor * sin(freq * uv.y + g_time10) + seedOffset;
-        uv.y += factor * cos(freq * uv.x + g_time10) + seedOffset;
+        uv.x += factor * sin(freq * uv.y - g_time10) - seedOffset;
+        uv.y += factor * cos(freq * uv.x - g_time10) + seedOffset;
     }
     return uv;
 }
@@ -111,7 +111,7 @@ vec3 renderBubbles(vec2 coord) {
         vec3 spherePos = vec3(pos, sqrt(rSq - lenSq)) / u_bubbleRadii[i];
         float angle = atan(spherePos.x + spherePos.z * u_bubbleSeeds[i] * 0.5, spherePos.z) + u_bubbleSeeds[i] * TWO_PI;
         vec2 spherePos2D = vec2(cos(angle + PI), sin(angle + PI) + spherePos.y + 1.0);
-        vec2 maskUV = watercolorNoise(spherePos2D, watercolorIters, u_bubbleSeeds[i]);
+        vec2 maskUV = watercolorNoise(spherePos2D, watercolorIters, u_bubbleSeeds[i] + u_bubbleColors[i].r * 0.01);
         float maskSum = maskUV.x + maskUV.y;
 
         // Calculate outline
@@ -138,11 +138,11 @@ vec3 renderBubbles(vec2 coord) {
     color = mix(outlineColor, color, smoothstep(0.0, 0.002, absD) * (1.0 - innerMask));
     if (absD < 0.03 && d < 0.0) {        
         grad = totalInfluence > 0.001 ? normalize(grad / totalInfluence) : vec2(0.0, 1.0);
-        float specular = 1.0 + smoothstep(0.0, 0.5, max(dot(grad, normalize(u_lightPosition - gl_FragCoord.xy / u_resolution)) - 0.5, 0.0));
+        float specular = 0.8 + smoothstep(0.0, 0.5, max(dot(grad, normalize(u_lightPosition - gl_FragCoord.xy / u_resolution)) - 0.5, 0.0));
         color *= specular * specular;
     }
     return color * u_strobe;
-}
+} 
 
 void main() {
     initGlobals();
@@ -162,5 +162,5 @@ void main() {
     vec2 dotsCoord = rotateCoord(g_normPos, sin(u_time + u_smoothEnergy), cos(u_time + u_smoothEnergy)) - 0.5;
     vec3 dots = renderDots(dotsCoord) * u_strobe;
     vec3 octagon = renderOctagon(dotsCoord);
-    fragColor = vec4(bubbles.g > 0.0 ? bubbles : max(dots, octagon), 1.0);
+    fragColor = vec4(bubbles.g + bubbles.b + bubbles.r > 0.0 ? bubbles : max(dots, octagon), 1.0);
 }

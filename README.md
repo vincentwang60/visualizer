@@ -1,58 +1,40 @@
-# Music Visualizer
+## Visualizer
 
-A simple Kotlin Multiplatform Android app built with Jetpack Compose.
+Shader-based music visualizer app for android.
+Reacts to any sound playing on the phone, including Spotify and Youtube Music.
 
-## 🚀 **Current State**
+### Demo
 
-This is a clean, simplified version of the Music Visualizer project. The app currently displays a "Hello World" interface and serves as a foundation for future development.
+![Demo](/demo.gif)
 
-## 🏗️ **Project Structure**
+Full video with sound: [Watch the demo](https://www.dropbox.com/scl/fi/xyd2uh2sdn4sltn8noety/Screen_Recording_20250909_005642.mp4?rlkey=blwvf6wv0lzre2yomgdm43wbe&st=ijh5ul0j&dl=0)
 
-```
-MusicVisualizer/
-├── androidApp/                    # Android application module
-│   ├── src/main/
-│   │   ├── kotlin/               # Android-specific UI and logic
-│   │   ├── res/                  # Android resources
-│   │   └── AndroidManifest.xml   # App configuration
-│   └── build.gradle.kts          # Android app dependencies
-├── shared/                       # Kotlin Multiplatform shared code
-│   └── src/commonMain/kotlin/
-│       └── com/musicvisualizer/shared/model/
-│           └── AudioData.kt      # Shared data models
-└── build.gradle.kts              # Root project configuration
-```
+### Getting started
 
-## 🔧 **Getting Started**
+1. Requirements
+   - Android Studio
+   - Android SDK 24+ and NDK if prompted
+   - A physical Android device
 
-### **Prerequisites**
-- Android Studio Arctic Fox or later
-- Android SDK 24+
-- Kotlin 1.9.20+
-- Gradle 8.0+
+2. Clone
+   - `git clone https://github.com/yourname/visualizer.git`
+   - `cd visualizer`
 
-### **Installation**
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd MusicVisualizer
-```
+3. Open in Android Studio
+   - File → Open → select the `visualizer` folder (the Android project root)
+   - Let Gradle sync finish
 
-2. Open the project in Android Studio
+4. Configure Run
+   - Select the `androidApp` run configuration if available, or choose the `app`/`androidApp` module
+   - Connect your developer mode enabled Android with USB debugging 
 
-3. Sync Gradle files and build the project
+5. Microphone permission
+   - On first launch, grant microphone/audio record permissions
+   - Ensure audio is playing on the device for visualization
 
-4. Run the app on an Android device or emulator
+6. Run
+   - Click Run ▶ in Android Studio
 
-## 🎯 **Development Roadmap**
+### License
 
-This project is ready for incremental development. Future features could include:
-
-- Audio processing and visualization
-- Image processing and effects
-- Real-time music visualization
-- Advanced UI components
-
-## 📄 **License**
-
-This project is licensed under the MIT License - see the LICENSE file for details. 
+MIT
